@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+
+# 도구 캐시
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# 환경 변수 (실제 비밀값은 커밋하지 않는다. uv.lock은 의도적으로 추적한다.)
+.env
+.env.*
+!.env.example
+
+# Node / Next.js (FE-00 이후)
+node_modules/
+.next/
+
+# 에디터 / OS
+.vscode/
+.idea/
+.DS_Store

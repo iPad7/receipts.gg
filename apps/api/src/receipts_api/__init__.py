@@ -1,0 +1,1 @@
+"""receipts.gg backend API."""

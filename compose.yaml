@@ -1,0 +1,28 @@
+name: receipts-gg
+
+# 개발용 PostgreSQL 만 컨테이너로 실행한다. API 는 호스트에서 uv 로 실행한다.
+# API 컨테이너 이미지는 REL-00 에서 다룬다.
+#
+# 아래 자격 증명은 로컬 개발 전용 기본값이며 운영 환경에서는 사용하지 않는다.
+# 필요하면 쉘 환경 변수로 덮어쓸 수 있다.
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-receipts}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-receipts_local_dev}
+      POSTGRES_DB: ${POSTGRES_DB:-receipts}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      # 컨테이너가 "시작됨" 과 "접속 가능" 은 다르다. BE-01 의 마이그레이션 자동화가 이 차이에 의존한다.
+      test:
+        ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-receipts} -d ${POSTGRES_DB:-receipts}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  db_data:
