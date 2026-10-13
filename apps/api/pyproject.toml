@@ -9,6 +9,7 @@ dependencies = [
     "pydantic-settings>=2.4",
     "sqlalchemy>=2.0",
     "psycopg[binary]>=3.2",
+    "alembic>=1.13",
 ]
 
 [dependency-groups]
@@ -33,6 +34,11 @@ src = ["src", "tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.ruff.lint.per-file-ignores]
+# Alembic 이 생성하는 마이그레이션의 CHECK 제약 SQL 은 단일 문자열 리터럴이라
+# 포매터가 줄바꿈할 수 없다. 생성 코드에 한해 줄 길이 제한을 면제한다.
+"migrations/versions/*" = ["E501"]
 
 [tool.mypy]
 python_version = "3.13"
