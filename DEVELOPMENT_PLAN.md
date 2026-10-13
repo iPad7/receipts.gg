@@ -38,7 +38,7 @@
 
 | ID | 단계 | 현재 상태 | 주요 선행 조건 | 핵심 결과물 |
 |---|---|---|---|---|
-| BE-00 | 저장소·개발 환경 초기화 | VERIFYING | 문서 인수인계 | 백엔드·DB 실행, 헬스체크, 테스트 명령 |
+| BE-00 | 저장소·개발 환경 초기화 | DONE | 문서 인수인계 | 백엔드·DB 실행, 헬스체크, 테스트 명령 |
 | BE-01 | 데이터 모델·공통 기반 | TODO | BE-00 | 마이그레이션, 트랜잭션, 공통 오류, site 경계 |
 | BE-02 | 관리자 인증·인가 | TODO | BE-01 | 서버 세션·CSRF·권한 테스트 |
 | BE-03 | CMS 백엔드 | TODO | BE-02 | 프로필·링크·일정·공지 API |
@@ -87,7 +87,7 @@
 
 ```text
 Milestone: BE-00
-Status: VERIFYING  (개발자 확인 후 DONE)
+Status: DONE
 Decisions approved: Python 3.13 / 동기 SQLAlchemy + psycopg3 / apps 모노레포 구조 /
   mypy 도입 / PostgreSQL 17 / DB만 컨테이너 / git init까지(커밋 제외) / CI 초안 포함
 Commands executed and results:
@@ -103,13 +103,17 @@ Commands executed and results:
                                        DSN·자격증명·스택트레이스 비노출, 서버 생존
   curl /api/v1/health (DB 복구 후)   → 200 (재시작 없이 복구, pool_pre_ping)
   docker compose down -v             → 컨테이너·볼륨·포트 모두 해제 확인
+  origin 클론 후 전체 재검증          → uv sync --frozen, ruff, mypy, 6 passed,
+                                       /health 200 (다른 환경에서 재현 가능 확인)
+  GitHub Actions CI                  → run 38393750661 success, 26s, 6 passed
+                                       (서비스 컨테이너의 실제 PostgreSQL 통합 테스트 포함)
 Follow-up completed (같은 날):
   - 문서 재배치: 설계 문서 6개 → docs/, 일회성 산출물 3개 → docs/archive/
   - ADR-0007 (동기 SQLAlchemy + psycopg3), ADR-0008 (오류 응답 계약) 작성
   - SA §7 보완: 409 범위 확장, 429 추가, 404 숨김 정책 명시 (SA v0.3)
 Known gaps / risks:
-  - .github/workflows/ci.yml 은 작성만 하고 실행 검증하지 않음 (원격 저장소 없음)
   - Starlette 1.8 이 testclient 의 httpx 사용을 deprecated 로 경고 (httpx2 권장)
+  - ubuntu-latest 런너가 2026-10-19 부터 Ubuntu 26 으로 교체 예정 (OS 의존 없음, 인지만)
   - 오류 처리 구현은 미착수. ADR-0008 §8 에 따라 BE-01 에서 공통 골격만 작성
   - Git 커밋·푸시는 개발자가 직접 수행 (Claude 는 커밋 제목만 제안)
 Next task awaiting approval: BE-01 (데이터 모델·공통 기반) 사전 보고

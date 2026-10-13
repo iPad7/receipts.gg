@@ -76,7 +76,7 @@ receipts.gg/
 ├── CLAUDE.md                   # 작업 지침 + 검증된 개발 명령
 ├── DEVELOPMENT_PLAN.md         # 단계별 실행 계획과 진행 상태
 ├── compose.yaml                # 개발용 PostgreSQL
-├── .github/workflows/ci.yml    # Ruff·mypy·pytest (미검증 초안)
+├── .github/workflows/ci.yml    # Ruff·mypy·pytest (PostgreSQL 서비스 컨테이너 포함)
 ├── apps/
 │   └── api/                    # FastAPI 백엔드 (uv 프로젝트)
 │       ├── pyproject.toml / uv.lock / .python-version / .env.example
