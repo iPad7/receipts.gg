@@ -31,9 +31,10 @@ jobs:
       DATABASE_URL: postgresql+psycopg://receipts:receipts_local_dev@localhost:5432/receipts
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: astral-sh/setup-uv@v5
+      # setup-uv 는 v7 이후 플로팅 메이저 태그를 제공하지 않으므로 정확한 버전을 고정한다.
+      - uses: astral-sh/setup-uv@v10.3.0
         with:
           enable-cache: true
 
