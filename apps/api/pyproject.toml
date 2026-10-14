@@ -18,6 +18,7 @@ dev = [
     "httpx>=0.27",
     "ruff>=0.6",
     "mypy>=1.11",
+    "import-linter>=2.15",
 ]
 
 [build-system]
@@ -53,4 +54,42 @@ testpaths = ["tests"]
 addopts = "-ra --strict-markers"
 markers = [
     "integration: 실제 PostgreSQL 연결이 필요한 테스트",
+]
+
+# 모듈러 모놀리스의 경계를 규약이 아니라 CI 로 강제한다 (ADR-0009, SA §4).
+[tool.importlinter]
+root_package = "receipts_api"
+# 외부 패키지(sqlalchemy 등)를 금지 대상으로 지정하려면 필요하다.
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "도메인은 SQLAlchemy 를 모른다"
+type = "forbidden"
+source_modules = ["receipts_api.modules.*.domain"]
+forbidden_modules = ["sqlalchemy", "alembic", "fastapi", "pydantic"]
+
+[[tool.importlinter.contracts]]
+name = "core 는 도메인 지식을 갖지 않는다"
+type = "forbidden"
+source_modules = ["receipts_api.core"]
+forbidden_modules = ["receipts_api.modules"]
+
+[[tool.importlinter.contracts]]
+name = "모듈은 Presentation 을 import 하지 않는다"
+type = "forbidden"
+source_modules = ["receipts_api.modules.*"]
+forbidden_modules = ["receipts_api.api", "receipts_api.main", "receipts_api.mappings"]
+
+# 현재 모듈 간 import 는 0건이다. BE-05 에서 RMS 가 Viewers·Roulette 의 service 를
+# 호출해야 하면 이 계약을 모듈별 forbidden 으로 완화하고, 그때 명시적으로 승인받는다.
+[[tool.importlinter.contracts]]
+name = "모듈은 서로 독립이다"
+type = "independence"
+modules = [
+    "receipts_api.modules.sites",
+    "receipts_api.modules.identity",
+    "receipts_api.modules.viewers",
+    "receipts_api.modules.roulette",
+    "receipts_api.modules.rms",
+    "receipts_api.modules.audit",
 ]

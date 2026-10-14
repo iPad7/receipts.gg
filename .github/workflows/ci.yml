@@ -49,5 +49,8 @@ jobs:
       - name: Type check
         run: uv run mypy src tests
 
+      - name: Import boundaries
+        run: uv run lint-imports --no-logo
+
       - name: Test (unit + integration)
         run: uv run pytest
