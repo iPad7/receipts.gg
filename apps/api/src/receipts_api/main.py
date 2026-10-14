@@ -5,6 +5,8 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+# 테이블 정의와 imperative mapping 을 등록한다. 부수효과를 위한 import 이다.
+import receipts_api.mappings  # noqa: F401
 from receipts_api.api.v1.health import router as health_router
 from receipts_api.core.config import get_settings
 from receipts_api.core.db import create_db_engine

@@ -2,32 +2,27 @@
 
 DB URL 은 alembic.ini 가 아니라 애플리케이션 설정(.env)에서 가져온다.
 비밀값이 담긴 접속 문자열을 ini 파일에 두지 않기 위함이다.
+
+`receipts_api.mappings` import 가 모든 테이블 정의와 매핑을 실행한다.
+이 import 가 없으면 metadata 가 비어 있어 autogenerate 가 전체 테이블을
+'삭제 대상'으로 오인한다.
 """
 
 from logging.config import fileConfig
 
 from alembic import context
 
-from receipts_api.core.base import Base
+import receipts_api.mappings  # noqa: F401
+from receipts_api.core.base import metadata
 from receipts_api.core.config import get_settings
 from receipts_api.core.db import create_db_engine
-
-# autogenerate 가 모든 테이블을 인식하도록 모델 모듈을 명시적으로 import 한다.
-# import 가 누락된 모듈의 테이블은 metadata 에 없으므로 '삭제 대상'으로 오인된다.
-# 새 모듈을 추가하면 이 목록도 갱신해야 한다.
-from receipts_api.modules.audit import models as audit_models  # noqa: F401
-from receipts_api.modules.identity import models as identity_models  # noqa: F401
-from receipts_api.modules.rms import models as rms_models  # noqa: F401
-from receipts_api.modules.roulette import models as roulette_models  # noqa: F401
-from receipts_api.modules.sites import models as sites_models  # noqa: F401
-from receipts_api.modules.viewers import models as viewers_models  # noqa: F401
 
 config = context.config
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-target_metadata = Base.metadata
+target_metadata = metadata
 
 
 def run_migrations_offline() -> None:
