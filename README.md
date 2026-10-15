@@ -20,7 +20,7 @@ SOOP 소규모 인디 버튜버에게 제공할 **맞춤형 공개 홈페이지 
 | [`docs/IA_USER_FLOW.md`](docs/IA_USER_FLOW.md) | Public/Admin IA와 작업 흐름 |
 | [`docs/WIREFRAMES.md`](docs/WIREFRAMES.md) | 화면별 저충실도 구성·인터랙션 |
 | [`docs/SOFTWARE_ARCHITECTURE.md`](docs/SOFTWARE_ARCHITECTURE.md) | 기술 스택·모듈 경계·보안·API·배포·테스트 |
-| [`docs/adr/`](docs/adr/) | 아키텍처 의사결정 기록 8개 |
+| [`docs/adr/`](docs/adr/) | 아키텍처 의사결정 기록 9개 |
 | [`docs/archive/`](docs/archive/) | 수명이 끝난 산출물(인수인계 가이드, 문서 정합성 점검 기록) |
 
 ## 구현에서 반드시 지킬 것
@@ -76,22 +76,28 @@ receipts.gg/
 ├── CLAUDE.md                   # 작업 지침 + 검증된 개발 명령
 ├── DEVELOPMENT_PLAN.md         # 단계별 실행 계획과 진행 상태
 ├── compose.yaml                # 개발용 PostgreSQL
-├── .github/workflows/ci.yml    # Ruff·mypy·pytest (PostgreSQL 서비스 컨테이너 포함)
+├── .github/workflows/ci.yml    # Ruff·mypy·import-linter·pytest (PostgreSQL 서비스 포함)
 ├── apps/
 │   └── api/                    # FastAPI 백엔드 (uv 프로젝트)
 │       ├── pyproject.toml / uv.lock / .python-version / .env.example
+│       ├── alembic.ini / migrations/
 │       ├── src/receipts_api/
 │       │   ├── main.py         # 앱 조립, lifespan
-│       │   ├── core/           # config.py(설정), db.py(엔진·연결 확인)
-│       │   └── api/v1/         # health.py
+│       │   ├── mappings.py     # 모든 모듈의 테이블·매핑 등록 지점
+│       │   ├── core/           # config, db, base(메타데이터·명명 규칙), errors
+│       │   ├── api/v1/         # 횡단 관심사 엔드포인트 (health)
+│       │   └── modules/        # sites, identity, viewers, roulette, rms, audit
+│       │       └── <모듈>/     # domain.py(순수 도메인) + persistence.py(Table·매핑)
 │       └── tests/              # unit/ (DB 불필요), integration/ (실제 DB)
 └── docs/
     ├── PRD.md / DOMAIN_MODEL.md / AGGREGATE_DESIGN.md
     ├── IA_USER_FLOW.md / WIREFRAMES.md / SOFTWARE_ARCHITECTURE.md
-    ├── adr/                    # ADR-0001~0008
+    ├── adr/                    # ADR-0001~0009
     └── archive/                # HANDOFF.md, 문서 정합성 점검 기록
 ```
 
 루트에는 **진입점 3개와 설정 파일**만 둡니다. 설계 문서는 `docs/`, 수명이 끝난 산출물은 `docs/archive/`로 분리해 "지금도 유효한 문서"를 구분합니다.
 
-SA §4의 도메인 모듈(Identity·CMS·RMS 등) 디렉터리는 실제 모델이 생기는 **BE-01에서** 추가합니다. `apps/web`(Next.js)은 **FE-00에서** 추가합니다.
+계층은 디렉터리의 최상위 축이 아니라 **모듈 내부의 파일로 실현합니다**(module-first). 도메인 계층은 SQLAlchemy를 import하지 않으며, 이 경계는 `import-linter` 계약으로 CI에서 강제됩니다. 근거와 규약은 [`docs/adr/ADR-0009-module-package-structure.md`](docs/adr/ADR-0009-module-package-structure.md)에 있습니다.
+
+CMS 모듈과 `apps/web`(Next.js)은 각각 **BE-03**, **FE-00**에서 추가합니다.

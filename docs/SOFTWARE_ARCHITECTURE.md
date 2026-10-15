@@ -1,9 +1,11 @@
 # receipts.gg (가제) — Software Architecture
 
-- **버전:** 0.3
-- **개정일:** 2026-10-13
+- **버전:** 0.4
+- **개정일:** 2026-10-15
 - **상태:** Proposed Architecture Baseline
-- **개정 내역:** 0.3 — §7 오류 정책 보완(409 범위 확장, 429 추가, 404 숨김 정책, ADR-0008 참조)
+- **개정 내역:**
+  - 0.4 — §5에 계층의 패키지 배치(module-first) 명시, ADR-0009 참조
+  - 0.3 — §7 오류 정책 보완(409 범위 확장, 429 추가, 404 숨김 정책, ADR-0008 참조)
 - **참조:** `PRD.md`, `DOMAIN_MODEL.md`, `AGGREGATE_DESIGN.md`, `IA_USER_FLOW.md`, `WIREFRAMES.md`, `adr/`
 
 > `receipts.gg`는 제품 가제이다. 해당 도메인의 소유·DNS 구성·실제 접속 가능 여부는 미확인이다. 여기서 URL은 실제 호스팅을 보장하지 않는다.
@@ -85,6 +87,8 @@ flowchart TB
 - **Infrastructure:** DB Repository/Unit of Work, 세션 저장, 이미지 스토리지, 외부 어댑터.
 
 작은 모듈에 형식적인 인터페이스를 기계적으로 늘리지 않는다. 백엔드가 업무 규칙의 최종 실행 위치다.
+
+**패키지 배치:** 계층은 디렉터리의 최상위 축이 아니라 **모듈 내부의 파일로 실현한다**(module-first). 모듈 하나에 Domain·Application·Presentation·Infrastructure가 파일 단위로 모이며, 구체적인 파일 구성과 경계 강제 방식은 **ADR-0009**를 따른다.
 
 ## 6. 데이터 및 거래 일관성
 

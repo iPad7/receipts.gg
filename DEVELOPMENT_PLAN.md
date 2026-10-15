@@ -39,7 +39,7 @@
 | ID | 단계 | 현재 상태 | 주요 선행 조건 | 핵심 결과물 |
 |---|---|---|---|---|
 | BE-00 | 저장소·개발 환경 초기화 | DONE | 문서 인수인계 | 백엔드·DB 실행, 헬스체크, 테스트 명령 |
-| BE-01 | 데이터 모델·공통 기반 | TODO | BE-00 | 마이그레이션, 트랜잭션, 공통 오류, site 경계 |
+| BE-01 | 데이터 모델·공통 기반 | IN_PROGRESS | BE-00 | 마이그레이션, 트랜잭션, 공통 오류, site 경계 |
 | BE-02 | 관리자 인증·인가 | TODO | BE-01 | 서버 세션·CSRF·권한 테스트 |
 | BE-03 | CMS 백엔드 | TODO | BE-02 | 프로필·링크·일정·공지 API |
 | BE-04 | 룰렛 정의 API | TODO | BE-01~02 | Roulette/Prize CRUD·공개 조건 |
@@ -125,14 +125,65 @@ Next task awaiting approval: BE-01 (데이터 모델·공통 기반) 사전 보�
 
 **계획 항목**
 
-- [ ] ERD/스키마 초안과 `site_id` 교차 참조 정책 설계 후 승인
-- [ ] SQLAlchemy 모델과 Alembic 초기 마이그레이션
-- [ ] Session/Transaction 경계 및 명시적 Unit of Work 또는 단순 대안 검토
-- [ ] 공통 응답·도메인 예외 → HTTP 오류 변환 규칙
-- [ ] 사이트 범위에 관한 DB 참조 제약, 인덱스·고유성 제약
-- [ ] 테스트 DB 구성, 마이그레이션 업/다운 및 기본 롤백 검증
+- [x] ERD/스키마 초안과 `site_id` 교차 참조 정책 설계 후 승인 (1단계)
+- [x] SQLAlchemy 모델과 Alembic 초기 마이그레이션 (2단계)
+- [ ] Session/Transaction 경계 및 명시적 Unit of Work 또는 단순 대안 검토 (3단계)
+- [ ] 공통 응답·도메인 예외 → HTTP 오류 변환 규칙 (3단계, ADR-0008 §8 범위)
+- [x] 사이트 범위에 관한 DB 참조 제약, 인덱스·고유성 제약 (2단계 — 복합 외래키)
+- [ ] 테스트 DB 구성, 마이그레이션 업/다운 및 기본 롤백 검증 (4단계)
+
+**단계 구성:** 1단계 스키마 설계 → 2단계 모델·마이그레이션 → **2.5단계 도메인 계층 분리(ADR-0009)** → 3단계 세션·트랜잭션 경계·오류 변환 → 4단계 테스트 DB·제약 검증
 
 **DoD:** 실제 PostgreSQL에서 마이그레이션이 재현되고 핵심 참조·유일성 제약과 실패 시 롤백이 테스트된다. 구체 테이블 설계는 이 단계에서 확정한다.
+
+**진행 기록 (2026-10-13 ~ 10-15)**
+
+```text
+Milestone: BE-01
+Status: IN_PROGRESS  (1·2·2.5단계 완료, 3·4단계 남음)
+Decisions approved:
+  1단계 — 복합 외래키로 사이트 격리 / UUIDv4 PK / UoW 래퍼 없음(Session 직접) /
+          요청 1건 = 트랜잭션 1건 / VARCHAR+CHECK / TIMESTAMPTZ / Alembic 명명 규칙
+          CMS·세션·미디어 테이블은 해당 단계로 이연 (11개 테이블만 확정)
+  2.5단계 — ADR-0009: module-first / 순수 도메인 + imperative mapping /
+          공유 커널 최소화 / import-linter 경계 강제 / 파일 우선 분리
+Files changed:
+  11개 테이블: streamer_sites, admin_users, admin_site_permissions, viewer_references,
+  roulette_definitions, prize_definitions, reward_acquisition_events, reward_grants,
+  fulfillments, audit_entries, idempotency_records
+  modules/<6개>/{domain.py, persistence.py}, core/{base,errors}.py, mappings.py,
+  migrations/versions/20261013_b9a231e40a81_initial_schema.py
+Commands executed and results:
+  alembic upgrade head → downgrade base → upgrade head  → 왕복 성공
+  alembic check                       → No new upgrade operations detected
+                                        (재작성 후에도 스키마 동일함을 증명)
+  제약 개수                            → CHECK 12 · FK 16 · PK 12 · UNIQUE 9
+  식별자 63바이트 초과                 → 0건 (FK 명명에 첫 컬럼만 사용)
+  데이터 수준 프로브 13건              → 전부 기대대로 (8건 DB 거부, 5건 허용)
+  lint-imports                        → 4 contracts kept, 0 broken
+                                        (위반 주입 시 exit=1 확인)
+  domain.py 6개의 sqlalchemy 참조      → 0건
+  pytest                              → 13 passed (도메인 7건은 DB 없이 0.02초)
+  ruff / mypy                         → 통과
+  CI run 38415231610, 38580320841     → success
+Acceptance criteria evidence:
+  NFR-003 → uq_idempotency_records_site_id_idempotency_key
+  NFR-004 → reward_grants.version (증가는 애플리케이션 책임, 단위 테스트로 검증)
+  AC-003-2 → ck_prize_definitions_probability_range
+  AC-003-4 → prize_name_snapshot, fulfillment_required_snapshot
+  AC-004-5 → reward_acquisition_events.recorded_by NOT NULL
+  FR-006 기본 비공개 → public_visibility server_default false
+  불변식 12 사이트 격리 → 복합 외래키 6개 (프로브로 거부 확인)
+  Q-004 닉네임 병합 금지 → 닉네임에 유일 제약을 두지 않음
+Known gaps / risks:
+  - 불변식 3(Fulfillment 존재 하한)·6·8·11 은 DB 로 강제 불가. 6·8·11 은 도메인
+    단위 테스트로 검증했고, 3 은 BE-05 에서 다룬다
+  - 2단계의 수동 프로브 13건이 자동 테스트로 이전되지 않음 → 4단계
+  - independence 계약은 BE-05 에서 모듈별 forbidden 으로 완화 필요
+  - alembic check 를 CI 에 추가하는 안은 미승인 상태
+  - Starlette 1.8 의 testclient httpx deprecation 경고
+Next task awaiting approval: BE-01 3단계 (세션·트랜잭션 경계 + common.* 오류 변환)
+```
 
 ### BE-02 — 관리자 인증·사이트 권한
 

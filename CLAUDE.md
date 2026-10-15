@@ -151,7 +151,7 @@ Claude Code가 파일 변경 도구를 실행하여 편집 승인을 요청하�
 
 아래는 BE-00에서 **실제 실행해 통과를 확인한** 명령입니다.
 
-**확정 버전:** Python 3.13.16 / FastAPI 0.143.0 / SQLAlchemy 2.1.4 / psycopg 3.3.6 / Pydantic 2.14.1 / PostgreSQL 17.11 (컨테이너). 정확한 버전은 `apps/api/uv.lock`이 고정합니다.
+**확정 버전:** Python 3.13.16 / FastAPI 0.143.0 / SQLAlchemy 2.1.4 / Alembic 1.20.0 / psycopg 3.3.6 / Pydantic 2.14.1 / import-linter 2.15 / PostgreSQL 17.11 (컨테이너). 정확한 버전은 `apps/api/uv.lock`이 고정합니다.
 
 **저장소 루트에서 (DB)**
 
@@ -170,12 +170,25 @@ cp .env.example .env                    # 최초 1회. .env 는 커밋하지 않
 uv sync                                 # uv.lock 기준 의존성 설치
 uv run ruff check . && uv run ruff format --check .
 uv run mypy src tests
-uv run pytest tests/unit                # DB 불필요
+uv run lint-imports --no-logo           # 모듈 경계 계약 검사 (ADR-0009)
+uv run pytest tests/unit                # DB 불필요 (도메인 테스트 포함)
 uv run pytest tests/integration         # 실제 PostgreSQL 필요
 uv run uvicorn receipts_api.main:app --host 127.0.0.1 --port 8000
 ```
 
 `--reload`는 개발 편의 옵션으로 추가할 수 있습니다(BE-00에서 미검증).
+
+**마이그레이션 (`apps/api`, DB 기동 필요)**
+
+```bash
+uv run alembic upgrade head             # 최신 스키마 적용
+uv run alembic downgrade base           # 전체 롤백
+uv run alembic check                    # 모델과 DB 스키마 일치 확인
+uv run alembic revision --autogenerate -m "<설명>"
+uv run ruff format migrations/versions/<생성된 파일>   # 생성 직후 1회
+```
+
+`revision --autogenerate` 결과는 그대로 쓰지 않고 반드시 읽고 수정합니다. Alembic의 렌더링 들여쓰기가 포매터 스타일과 달라 생성 직후 `ruff format`이 필요합니다.
 
 **헬스체크**
 
