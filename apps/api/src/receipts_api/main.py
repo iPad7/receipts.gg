@@ -7,9 +7,12 @@ from fastapi import FastAPI
 
 # 테이블 정의와 imperative mapping 을 등록한다. 부수효과를 위한 import 이다.
 import receipts_api.mappings  # noqa: F401
+from receipts_api.api.errors import register_error_handlers
+from receipts_api.api.middleware import RequestIdMiddleware
 from receipts_api.api.v1.health import router as health_router
 from receipts_api.core.config import get_settings
-from receipts_api.core.db import create_db_engine
+from receipts_api.core.db import create_db_engine, create_session_factory
+from receipts_api.core.logging import configure_logging
 
 API_V1_PREFIX = "/api/v1"
 
@@ -20,6 +23,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     app.state.settings = settings
     app.state.engine = create_db_engine(settings)
+    app.state.session_factory = create_session_factory(app.state.engine)
     try:
         yield
     finally:
@@ -27,7 +31,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 def create_app() -> FastAPI:
+    configure_logging()
     app = FastAPI(title="receipts.gg API", version="0.1.0", lifespan=lifespan)
+    app.add_middleware(RequestIdMiddleware)
+    register_error_handlers(app)
     app.include_router(health_router, prefix=API_V1_PREFIX)
     return app
 

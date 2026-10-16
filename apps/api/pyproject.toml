@@ -75,6 +75,12 @@ source_modules = ["receipts_api.core"]
 forbidden_modules = ["receipts_api.modules"]
 
 [[tool.importlinter.contracts]]
+name = "core 는 웹 프레임워크를 모른다"
+type = "forbidden"
+source_modules = ["receipts_api.core"]
+forbidden_modules = ["fastapi", "starlette"]
+
+[[tool.importlinter.contracts]]
 name = "모듈은 Presentation 을 import 하지 않는다"
 type = "forbidden"
 source_modules = ["receipts_api.modules.*"]

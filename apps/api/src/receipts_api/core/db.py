@@ -7,6 +7,7 @@ import logging
 
 from sqlalchemy import Engine, create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import Session, sessionmaker
 
 from receipts_api.core.config import Settings
 
@@ -22,6 +23,16 @@ def create_db_engine(settings: Settings) -> Engine:
         max_overflow=settings.db_max_overflow,
         connect_args={"connect_timeout": settings.db_connect_timeout},
     )
+
+
+def create_session_factory(engine: Engine) -> sessionmaker[Session]:
+    """요청마다 세션을 만들 팩토리.
+
+    `expire_on_commit=False` 로 두는 이유: 커밋 이후에도 객체 속성이 유효해야 한다.
+    기본값(True)이면 커밋 후 속성 접근이 재조회를 유발하고, 세션이 닫힌 뒤에는 실패한다.
+    트랜잭션 경계는 `core.transaction.transactional` 이 담당한다.
+    """
+    return sessionmaker(bind=engine, expire_on_commit=False)
 
 
 def check_connection(engine: Engine) -> bool:
