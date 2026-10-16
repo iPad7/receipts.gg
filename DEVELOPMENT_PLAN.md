@@ -127,8 +127,8 @@ Next task awaiting approval: BE-01 (데이터 모델·공통 기반) 사전 보�
 
 - [x] ERD/스키마 초안과 `site_id` 교차 참조 정책 설계 후 승인 (1단계)
 - [x] SQLAlchemy 모델과 Alembic 초기 마이그레이션 (2단계)
-- [ ] Session/Transaction 경계 및 명시적 Unit of Work 또는 단순 대안 검토 (3단계)
-- [ ] 공통 응답·도메인 예외 → HTTP 오류 변환 규칙 (3단계, ADR-0008 §8 범위)
+- [x] Session/Transaction 경계 및 명시적 Unit of Work 또는 단순 대안 검토 (3단계 — UoW 추상화 대신 `transactional` 블록, ADR-0003 보강)
+- [x] 공통 응답·도메인 예외 → HTTP 오류 변환 규칙 (3단계 — RFC 9457, ADR-0008 §8 범위)
 - [x] 사이트 범위에 관한 DB 참조 제약, 인덱스·고유성 제약 (2단계 — 복합 외래키)
 - [ ] 테스트 DB 구성, 마이그레이션 업/다운 및 기본 롤백 검증 (4단계)
 
