@@ -171,7 +171,7 @@ uv sync                                 # uv.lock 기준 의존성 설치
 uv run ruff check . && uv run ruff format --check .
 uv run mypy src tests
 uv run lint-imports --no-logo           # 모듈 경계 계약 검사 (ADR-0009)
-uv run pytest tests/unit                # DB 불필요 (도메인 테스트 포함)
+uv run pytest tests/unit                # DB 불필요 (도메인·오류 계약·요청 ID)
 uv run pytest tests/integration         # 실제 PostgreSQL 필요
 uv run uvicorn receipts_api.main:app --host 127.0.0.1 --port 8000
 ```
@@ -189,6 +189,12 @@ uv run ruff format migrations/versions/<생성된 파일>   # 생성 직후 1회
 ```
 
 `revision --autogenerate` 결과는 그대로 쓰지 않고 반드시 읽고 수정합니다. Alembic의 렌더링 들여쓰기가 포매터 스타일과 달라 생성 직후 `ruff format`이 필요합니다.
+
+**통합 테스트의 데이터베이스**
+
+통합 테스트는 **개발 DB를 쓰지 않습니다.** 같은 컨테이너 안의 별도 데이터베이스 `receipts_test`를 사용하며, 없으면 테스트 픽스처가 만들고 마이그레이션을 1회 적용합니다. 각 테스트 후 도메인 테이블을 `TRUNCATE`하며 `alembic_version`은 보존합니다. 마이그레이션 왕복 테스트는 전용 임시 DB(`receipts_migration_test`)를 만들고 삭제합니다.
+
+따라서 `docker compose up -d db` 외에 별도 준비가 필요하지 않습니다. 테스트 DB를 초기화하려면 저장소 루트에서 `docker compose down -v`를 실행합니다.
 
 **헬스체크**
 

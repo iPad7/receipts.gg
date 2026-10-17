@@ -39,7 +39,7 @@
 | ID | 단계 | 현재 상태 | 주요 선행 조건 | 핵심 결과물 |
 |---|---|---|---|---|
 | BE-00 | 저장소·개발 환경 초기화 | DONE | 문서 인수인계 | 백엔드·DB 실행, 헬스체크, 테스트 명령 |
-| BE-01 | 데이터 모델·공통 기반 | IN_PROGRESS | BE-00 | 마이그레이션, 트랜잭션, 공통 오류, site 경계 |
+| BE-01 | 데이터 모델·공통 기반 | DONE | BE-00 | 마이그레이션, 트랜잭션, 공통 오류, site 경계 |
 | BE-02 | 관리자 인증·인가 | TODO | BE-01 | 서버 세션·CSRF·권한 테스트 |
 | BE-03 | CMS 백엔드 | TODO | BE-02 | 프로필·링크·일정·공지 API |
 | BE-04 | 룰렛 정의 API | TODO | BE-01~02 | Roulette/Prize CRUD·공개 조건 |
@@ -130,7 +130,7 @@ Next task awaiting approval: BE-01 (데이터 모델·공통 기반) 사전 보�
 - [x] Session/Transaction 경계 및 명시적 Unit of Work 또는 단순 대안 검토 (3단계 — UoW 추상화 대신 `transactional` 블록, ADR-0003 보강)
 - [x] 공통 응답·도메인 예외 → HTTP 오류 변환 규칙 (3단계 — RFC 9457, ADR-0008 §8 범위)
 - [x] 사이트 범위에 관한 DB 참조 제약, 인덱스·고유성 제약 (2단계 — 복합 외래키)
-- [ ] 테스트 DB 구성, 마이그레이션 업/다운 및 기본 롤백 검증 (4단계)
+- [x] 테스트 DB 구성, 마이그레이션 업/다운 및 기본 롤백 검증 (4단계)
 
 **단계 구성:** 1단계 스키마 설계 → 2단계 모델·마이그레이션 → **2.5단계 도메인 계층 분리(ADR-0009)** → 3단계 세션·트랜잭션 경계·오류 변환 → 4단계 테스트 DB·제약 검증
 
@@ -140,7 +140,7 @@ Next task awaiting approval: BE-01 (데이터 모델·공통 기반) 사전 보�
 
 ```text
 Milestone: BE-01
-Status: IN_PROGRESS  (1·2·2.5단계 완료, 3·4단계 남음)
+Status: DONE  (1·2·2.5·3·4단계 완료)
 Decisions approved:
   1단계 — 복합 외래키로 사이트 격리 / UUIDv4 PK / UoW 래퍼 없음(Session 직접) /
           요청 1건 = 트랜잭션 1건 / VARCHAR+CHECK / TIMESTAMPTZ / Alembic 명명 규칙
@@ -166,6 +166,17 @@ Commands executed and results:
   pytest                              → 13 passed (도메인 7건은 DB 없이 0.02초)
   ruff / mypy                         → 통과
   CI run 38415231610, 38580320841     → success
+  [3단계] 커밋 시점 실패 가시성 프로브  → 의존성 커밋 시 200 수신 확인 → D4 메커니즘 수정
+                                        (transactional 블록, ADR-0003 보강)
+  [3단계] 오류 계약·요청 ID 테스트      → 16 passed (DB 불필요)
+  [4단계] 테스트 DB 자동 생성           → receipts_test, 마이그레이션 1회 적용
+  [4단계] 개발 DB 오염 여부             → receipts 에 테이블 0개 (오염 없음)
+  [4단계] 마이그레이션 왕복 (임시 DB)   → upgrade/downgrade/upgrade 성공, 임시 DB 삭제
+  [4단계] 제약 테스트                   → 20 passed (2단계 수동 프로브 전부 자동화)
+  [4단계] TX-001 원자성                 → 중도 실패 시 Grant·Fulfillment·Audit 전부 0건
+  [4단계] 3회 연속 실행                 → 58 passed × 3 (TRUNCATE 격리 확인)
+  [4단계] DB 중지 상태                  → 단위 27 passed, 통합 31 errors (의도대로)
+  pytest 최종                          → 58 passed (단위 27 + 통합 31)
 Acceptance criteria evidence:
   NFR-003 → uq_idempotency_records_site_id_idempotency_key
   NFR-004 → reward_grants.version (증가는 애플리케이션 책임, 단위 테스트로 검증)
