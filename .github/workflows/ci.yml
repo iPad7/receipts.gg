@@ -52,5 +52,11 @@ jobs:
       - name: Import boundaries
         run: uv run lint-imports --no-logo
 
+      # 모델을 고치고 마이그레이션을 잊은 상태를 잡는다.
+      - name: Migration drift
+        run: |
+          uv run alembic upgrade head
+          uv run alembic check
+
       - name: Test (unit + integration)
         run: uv run pytest

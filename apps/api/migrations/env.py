@@ -25,10 +25,21 @@ if config.config_file_name is not None:
 target_metadata = metadata
 
 
+def _database_url() -> str:
+    """대상 DB 접속 문자열.
+
+    `Config` 에 프로그램으로 설정된 `sqlalchemy.url` 이 있으면 그것을 우선한다
+    (테스트가 전용 테스트 DB 에 마이그레이션을 적용할 때 사용).
+    없으면 애플리케이션 설정에서 읽는다. `alembic.ini` 에는 URL 을 두지 않는다.
+    """
+    configured = config.get_main_option("sqlalchemy.url", None)
+    return configured or get_settings().database_url
+
+
 def run_migrations_offline() -> None:
     """SQL 스크립트만 생성하는 모드. DB 접속 없이 동작한다."""
     context.configure(
-        url=get_settings().database_url,
+        url=_database_url(),
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
@@ -41,7 +52,8 @@ def run_migrations_offline() -> None:
 
 def run_migrations_online() -> None:
     """실제 DB 에 적용하는 모드."""
-    engine = create_db_engine(get_settings())
+    settings = get_settings()
+    engine = create_db_engine(settings, url=_database_url())
     try:
         with engine.connect() as connection:
             context.configure(

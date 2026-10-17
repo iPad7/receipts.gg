@@ -14,10 +14,14 @@ from receipts_api.core.config import Settings
 logger = logging.getLogger(__name__)
 
 
-def create_db_engine(settings: Settings) -> Engine:
-    """커넥션 풀을 생성한다. 이 호출 자체는 DB에 접속하지 않는다."""
+def create_db_engine(settings: Settings, *, url: str | None = None) -> Engine:
+    """커넥션 풀을 생성한다. 이 호출 자체는 DB에 접속하지 않는다.
+
+    `url` 을 주면 설정의 `database_url` 대신 그것을 사용한다. 풀·타임아웃 설정은
+    공유하면서 대상 DB 만 바꿀 때 쓴다(마이그레이션, 테스트 DB).
+    """
     return create_engine(
-        settings.database_url,
+        url or settings.database_url,
         pool_pre_ping=True,
         pool_size=settings.db_pool_size,
         max_overflow=settings.db_max_overflow,

@@ -1,119 +1,134 @@
-"""트랜잭션 경계 (D4 수정안 B). 실제 PostgreSQL 이 필요하다.
+"""트랜잭션 경계와 TX-001 원자성 (ADR-0003 보강).
 
-핵심은 **커밋이 라우트 호출 경로 안에서 일어나는지**다. `yield` 의존성의 종료 코드에서
-커밋하면 응답 본문이 이미 만들어진 뒤라 커밋 실패를 클라이언트에 보고할 수 없다.
+커밋이 라우트 호출 경로 안에서 일어나야 한다. `yield` 의존성의 종료 코드에서 커밋하면
+응답 본문이 이미 만들어진 뒤라 커밋 실패를 클라이언트에 보고할 수 없다.
 
-전용 테스트 스키마는 4단계에서 구성한다. 여기서는 임시 테이블로 경계 자체를 검증한다.
+실제 스키마를 사용한다. 테스트 DB 와 정리는 `conftest.py` 의 픽스처가 담당한다.
 """
 
-from collections.abc import Iterator
 from uuid import uuid4
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy import Engine, text
+from sqlalchemy import Engine, func, select
+from sqlalchemy.orm import Session
 
 from receipts_api.api.dependencies import SessionDep
 from receipts_api.api.errors import register_error_handlers
 from receipts_api.api.middleware import RequestIdMiddleware
-from receipts_api.core.config import get_settings
-from receipts_api.core.db import create_db_engine, create_session_factory
+from receipts_api.core.db import create_session_factory
 from receipts_api.core.transaction import transactional
-from receipts_api.modules.rms.domain import CompletedGrantNotVoidable
+from receipts_api.modules.audit.domain import AuditEntry
+from receipts_api.modules.rms.domain import (
+    CompletedGrantNotVoidable,
+    Fulfillment,
+    RewardGrant,
+)
+from receipts_api.modules.rms.persistence import fulfillments, reward_grants
+from tests.factories import NOW, Seed, seed_minimal
 
-TABLE = "tx_boundary_probe"
+pytestmark = pytest.mark.integration
+
+
+def count_rows(engine: Engine, table: object) -> int:
+    with engine.connect() as conn:
+        return int(conn.execute(select(func.count()).select_from(table)).scalar_one())  # type: ignore[arg-type]
+
+
+def _build_grant(seed: Seed) -> RewardGrant:
+    return RewardGrant(
+        site_id=seed.site.site_id,
+        event_id=seed.event.event_id,
+        viewer_id=seed.viewer.viewer_id,
+        prize_id=seed.prize.prize_id,
+        prize_name_snapshot="방셀",
+        fulfillment_required_snapshot=True,
+        granted_at=NOW,
+    )
 
 
 @pytest.fixture
-def engine() -> Iterator[Engine]:
-    eng = create_db_engine(get_settings())
-    with eng.begin() as conn:
-        conn.execute(text(f"DROP TABLE IF EXISTS {TABLE}"))
-        conn.execute(text(f"CREATE TABLE {TABLE} (label text NOT NULL)"))
-    try:
-        yield eng
-    finally:
-        with eng.begin() as conn:
-            conn.execute(text(f"DROP TABLE IF EXISTS {TABLE}"))
-        eng.dispose()
-
-
-@pytest.fixture
-def client(engine: Engine) -> TestClient:
+def client(test_engine: Engine) -> TestClient:
     app = FastAPI()
-    app.state.session_factory = create_session_factory(engine)
+    app.state.session_factory = create_session_factory(test_engine)
     app.add_middleware(RequestIdMiddleware)
     register_error_handlers(app)
 
-    @app.get("/write")
-    def route_write(session: SessionDep) -> dict[str, str]:
+    @app.post("/grants/{mode}")
+    def route_create_grant(mode: str, session: SessionDep) -> dict[str, str]:
+        seed = seed_minimal(session)
+        if mode == "forgot":
+            # transactional 을 쓰지 않은 쓰기 — 저장되지 않는다
+            session.add(_build_grant(seed))
+            return {"result": "ok"}
+
         with transactional(session):
-            session.execute(text(f"INSERT INTO {TABLE} (label) VALUES ('committed')"))
+            grant = _build_grant(seed)
+            session.add(grant)
+            session.flush()
+            session.add(Fulfillment(site_id=grant.site_id, grant_id=grant.grant_id))
+            session.add(
+                AuditEntry(
+                    site_id=grant.site_id,
+                    actor_id=seed.admin.admin_id,
+                    action_type="GRANT_CREATED",
+                    target_type="RewardGrant",
+                    target_id=grant.grant_id,
+                    occurred_at=NOW,
+                )
+            )
+            if mode == "fail":
+                raise CompletedGrantNotVoidable(uuid4())
         return {"result": "ok"}
 
-    @app.get("/write-then-fail")
-    def route_write_then_fail(session: SessionDep) -> dict[str, str]:
-        with transactional(session):
-            session.execute(text(f"INSERT INTO {TABLE} (label) VALUES ('rolled-back')"))
-            raise CompletedGrantNotVoidable(uuid4())
-
-    @app.get("/forgot-transactional")
-    def route_forgot(session: SessionDep) -> dict[str, str]:
-        session.execute(text(f"INSERT INTO {TABLE} (label) VALUES ('forgotten')"))
-        return {"result": "ok"}
-
-    @app.get("/read")
-    def route_read(session: SessionDep) -> dict[str, int]:
-        total = session.execute(text(f"SELECT count(*) FROM {TABLE}")).scalar_one()
-        return {"rows": int(total)}
+    @app.get("/grants")
+    def route_count(session: SessionDep) -> dict[str, int]:
+        total = session.scalar(select(func.count()).select_from(reward_grants))
+        return {"grants": int(total or 0)}
 
     return TestClient(app, raise_server_exceptions=False)
 
 
-def count(engine: Engine, label: str) -> int:
-    with engine.connect() as conn:
-        return int(
-            conn.execute(
-                text(f"SELECT count(*) FROM {TABLE} WHERE label = :l"), {"l": label}
-            ).scalar_one()
-        )
-
-
-@pytest.mark.integration
-def test_transactional_block_commits(client: TestClient, engine: Engine) -> None:
-    response = client.get("/write")
+def test_transactional_block_commits(client: TestClient, test_engine: Engine) -> None:
+    response = client.post("/grants/ok")
 
     assert response.status_code == 200
-    assert count(engine, "committed") == 1
+    assert count_rows(test_engine, reward_grants) == 1
+    assert count_rows(test_engine, fulfillments) == 1
 
 
-@pytest.mark.integration
-def test_domain_error_rolls_back_and_returns_409(client: TestClient, engine: Engine) -> None:
-    """NFR-002 — 중도 실패 시 부분 저장이 남지 않는다."""
-    response = client.get("/write-then-fail")
+def test_mid_transaction_failure_rolls_back_everything(
+    client: TestClient, test_engine: Engine
+) -> None:
+    """TX-001 / NFR-002 — 사건·권리·이행·감사가 일부만 남지 않는다."""
+    response = client.post("/grants/fail")
 
     assert response.status_code == 409
     assert response.json()["code"] == "rms.grant_not_voidable"
-    assert count(engine, "rolled-back") == 0
+    assert count_rows(test_engine, reward_grants) == 0
+    assert count_rows(test_engine, fulfillments) == 0
 
 
-@pytest.mark.integration
-def test_write_without_transactional_is_not_persisted(client: TestClient, engine: Engine) -> None:
-    """`transactional` 을 쓰지 않은 쓰기는 조용히 저장되지 않는다.
-
-    200 을 반환하지만 데이터가 없는 실패 모드이므로, 각 쓰기 유스케이스의 영속 여부는
-    해당 단계의 통합 테스트가 단정해야 한다.
-    """
-    response = client.get("/forgot-transactional")
+def test_write_without_transactional_is_not_persisted(
+    client: TestClient, test_engine: Engine
+) -> None:
+    """200 을 반환하지만 저장되지 않는 실패 모드. 조용한 저장보다는 안전하다."""
+    response = client.post("/grants/forgot")
 
     assert response.status_code == 200
-    assert count(engine, "forgotten") == 0
+    assert count_rows(test_engine, reward_grants) == 0
 
 
-@pytest.mark.integration
 def test_read_only_path_works_without_transactional(client: TestClient) -> None:
-    response = client.get("/read")
+    response = client.get("/grants")
 
     assert response.status_code == 200
-    assert response.json()["rows"] == 0
+    assert response.json()["grants"] == 0
+
+
+def test_session_fixture_is_isolated_between_tests(session: Session) -> None:
+    """TRUNCATE 격리 확인 — 앞선 테스트의 데이터가 남아 있지 않다."""
+    total = session.scalar(select(func.count()).select_from(reward_grants))
+
+    assert total == 0
