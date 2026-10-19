@@ -32,9 +32,17 @@ mapper_registry = registry(metadata=metadata)
 def enum_check(column: str, enum_cls: type[StrEnum], name: str) -> CheckConstraint:
     """열거형 컬럼의 허용값 CHECK 제약을 도메인 enum 에서 생성한다.
 
-    `Enum(create_constraint=True)` 를 쓰면 그 옵션이 만드는 제약과 명명 규칙이 적용된
-    제약이 겹쳐 동일한 CHECK 가 두 번 생성된다. 그래서 제약을 명시적으로 선언하고,
-    허용값의 단일 소스는 도메인 enum 으로 유지한다.
+    `Enum(create_constraint=True)` 를 쓰지 않는 이유 (BE-01 2단계 실측):
+
+    그 옵션을 쓰면 metadata 와 `create_all` 에서는 CHECK 가 1개로 정상이다. 문제는
+    Alembic autogenerate 다. 테이블의 제약을 `sa.CheckConstraint(...)` 로 명시적으로
+    렌더링하면서, `create_constraint=True` 가 붙은 Enum 타입의 컬럼도 그대로
+    렌더링한다. 그 마이그레이션을 실행하면 Enum 타입이 실행 시점에 제약을 한 번 더
+    만들어 중복이 생기고, 이름이 겹치는 경우
+    `check constraint "<이름>" already exists` 로 CREATE TABLE 자체가 실패한다.
+
+    그래서 타입은 제약을 만들지 않게 두고 제약을 명시적으로 선언한다. 허용값의 단일
+    소스는 도메인 enum 이며, 제약 이름은 명명 규칙이 결정한다.
     """
     allowed = ", ".join(f"'{member.value}'" for member in enum_cls)
     return CheckConstraint(f"{column} IN ({allowed})", name=name)
