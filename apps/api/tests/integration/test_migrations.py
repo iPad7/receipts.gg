@@ -14,7 +14,9 @@ from tests.integration.conftest import alembic_config
 
 pytestmark = pytest.mark.integration
 
-EXPECTED_TABLE_COUNT = 11
+# 일부러 하드코딩한다. metadata 에서 세면 테이블이 모르는 사이 늘거나 줄어도 통과한다.
+# BE-02 에서 admin_sessions·login_attempts 가 추가되어 11 → 13.
+EXPECTED_TABLE_COUNT = 13
 
 
 def _table_names(engine: Engine) -> set[str]:

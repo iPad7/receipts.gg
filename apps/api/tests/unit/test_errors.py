@@ -7,6 +7,9 @@ from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from pydantic import BaseModel
 
+# 하위 클래스 탐색은 import 된 클래스만 본다. 모든 모듈의 도메인을 강제로 로드해
+# 이 테스트의 적용 범위가 import 순서에 좌우되지 않게 한다.
+import receipts_api.mappings  # noqa: F401
 from receipts_api.api.errors import (
     ERROR_MAP,
     PROBLEM_JSON,

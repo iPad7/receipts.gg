@@ -6,8 +6,9 @@
 
 `type` 은 `code` 에서 URN 으로 파생하므로 이중 관리가 없다.
 
-3단계 범위는 `common.*` 와 2.5단계에서 이미 구현된 RMS 상태 전이 오류뿐이다.
+`common.*` 와 RMS 상태 전이 오류, 그리고 BE-02 의 `identity.*` 를 담는다.
 나머지 도메인 코드는 해당 규칙이 구현되는 단계에서 추가한다 (ADR-0008 §8).
+도메인 예외를 추가하고 이 표를 잊으면 `tests/unit/test_errors.py` 의 누락 검사가 CI 에서 막는다.
 """
 
 import logging
@@ -22,6 +23,7 @@ from starlette.requests import Request
 
 from receipts_api.core.errors import DomainError
 from receipts_api.core.request_context import current_request_id
+from receipts_api.modules.identity.domain import IdentityError, LoginRateLimited
 from receipts_api.modules.rms.domain import GrantError
 
 logger = logging.getLogger(__name__)
@@ -34,9 +36,15 @@ UNKNOWN_HTTP_CODE = "common.http_error"
 
 # 도메인 예외 → HTTP 상태. MRO 순회로 조회하므로 기반 클래스 하나가 하위를 덮는다.
 # 새 도메인 예외 계열을 추가하고 이 표를 잊으면 테스트가 CI 에서 막는다.
+# 도메인 예외 → HTTP 상태. MRO 순회로 조회하므로 기반 클래스 하나가 하위를 덮는다.
+# 새 도메인 예외 계열을 추가하고 이 표를 잊으면 테스트가 CI 에서 막는다.
 ERROR_MAP: dict[type[DomainError], int] = {
     # 불변식·상태 전이 위반은 409 (SA §7, ADR-0008 §4)
     GrantError: status.HTTP_409_CONFLICT,
+    # 인증 실패는 401. InvalidCredentials·SessionExpired 가 MRO 로 상속받는다.
+    IdentityError: status.HTTP_401_UNAUTHORIZED,
+    # 속도 제한만 429 로 덮는다. MRO 가 하위 클래스를 먼저 찾으므로 이 항목이 이긴다.
+    LoginRateLimited: status.HTTP_429_TOO_MANY_REQUESTS,
 }
 
 # 프레임워크가 던지는 HTTPException 의 상태 코드 → common.* 코드
@@ -63,6 +71,9 @@ _TITLES: dict[str, str] = {
     INTERNAL_ERROR_CODE: "서버 오류가 발생했습니다",
     "rms.grant_already_voided": "이미 무효화된 보상입니다",
     "rms.grant_not_voidable": "완료된 보상은 완료 기록을 먼저 정정해야 합니다",
+    "identity.invalid_credentials": "이메일 또는 비밀번호가 올바르지 않습니다",
+    "identity.session_expired": "세션이 만료되었습니다. 다시 로그인해 주세요",
+    "identity.login_rate_limited": "로그인 시도가 너무 많습니다. 잠시 후 다시 시도해 주세요",
 }
 DEFAULT_TITLE = "요청을 처리할 수 없습니다"
 

@@ -29,6 +29,10 @@ jobs:
 
     env:
       DATABASE_URL: postgresql+psycopg://receipts:receipts_local_dev@localhost:5432/receipts
+      # 일회용 CI 전용 값이다. 운영 비밀이 아니므로 커밋해도 된다
+      # (위 POSTGRES_PASSWORD 와 같은 성격). alembic 도 Settings 를 만들므로 필요하다.
+      SESSION_SECRET: ci-only-throwaway-session-secret-not-a-real-key
+      SESSION_COOKIE_SECURE: "true"
 
     steps:
       - uses: actions/checkout@v7
