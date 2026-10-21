@@ -4,12 +4,12 @@
 (`$argon2id$v=19$m=65536,t=3,p=4$...`). 실측 길이가 97자라 String(255)로 충분하다.
 파라미터를 올려야 할 때는 로그인 시점에 재해시해 점진 이행하므로 스키마가 바뀌지 않는다.
 
-SQLAlchemy를 import하지 않는다 (ADR-0009). 세션 만료 판정 등 동작 메서드는
-단위 테스트와 함께 2단계에서 추가한다.
+SQLAlchemy를 import하지 않는다 (ADR-0009). `AdminSession` 의 상태 판정 메서드는
+세션·쿼리를 만지지 않고 `now` 를 인수로 받으므로 DB 없이 단위 테스트할 수 있다.
 """
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import StrEnum
 from uuid import UUID, uuid4
 
@@ -104,6 +104,31 @@ class AdminSession:
     last_seen_at: datetime
     created_at: datetime | None = None
     revoked_at: datetime | None = None
+
+    def is_active_at(self, now: datetime, *, idle_limit: timedelta) -> bool:
+        """지금 이 세션으로 요청을 받아들여도 되는가.
+
+        폐기·절대 만료·유휴 만료 세 가지를 모두 통과해야 한다. **경계 시각 자체는
+        만료로 본다** — 절대와 유휴를 같은 규칙으로 맞췄다.
+
+        세션·쿼리를 만지지 않으므로 DB 없이 단위 테스트할 수 있다(ADR-0009).
+        """
+        if self.revoked_at is not None:
+            return False
+        if now >= self.absolute_expires_at:
+            return False
+        return now < self.last_seen_at + idle_limit
+
+    def touch(self, now: datetime, *, min_interval: timedelta) -> bool:
+        """유휴 시계를 되감는다. 실제로 바꿨으면 True.
+
+        `min_interval` 억제가 없으면 모든 요청이 UPDATE 를 유발한다. 읽기 경로가
+        쓰기를 만드는 전형적인 쓰기 증폭이라, 간격이 짧으면 건너뛴다.
+        """
+        if now - self.last_seen_at < min_interval:
+            return False
+        self.last_seen_at = now
+        return True
 
 
 @dataclass(kw_only=True)

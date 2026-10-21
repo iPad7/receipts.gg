@@ -12,15 +12,17 @@
 변환이 먼저 작동해 DB 제약이 실제로 막는지 확인할 수 없다.
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import func, select, text
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DataError, IntegrityError
 from sqlalchemy.orm import Session
 
+from receipts_api.core.security import new_session_token, token_fingerprint
+from receipts_api.modules.identity.persistence import login_attempts
 from receipts_api.modules.rms.domain import (
     EventType,
     FulfillmentStatus,
@@ -36,8 +38,10 @@ from tests.factories import (
     make_event,
     make_fulfillment,
     make_grant,
+    make_login_attempt,
     make_prize,
     make_roulette,
+    make_session,
     make_site,
     make_viewer,
     seed_minimal,
@@ -63,6 +67,20 @@ INSERT_GRANT_MINIMAL = text(
     " (grant_id, site_id, event_id, viewer_id, prize_name_snapshot,"
     "  fulfillment_required_snapshot, grant_status, granted_at)"
     " VALUES (:grant_id, :site_id, :event_id, :viewer_id, '방셀', true, 'ACTIVE', :granted_at)"
+)
+INSERT_ADMIN = text(
+    "INSERT INTO admin_users (admin_id, email, password_hash) VALUES (:admin_id, :email, 'x')"
+)
+INSERT_SESSION = text(
+    "INSERT INTO admin_sessions"
+    " (session_id, token_hash, admin_id, created_at, last_seen_at,"
+    "  absolute_expires_at, revoked_at)"
+    " VALUES (:session_id, :token_hash, :admin_id, :created_at, :last_seen_at,"
+    "         :absolute_expires_at, :revoked_at)"
+)
+INSERT_ATTEMPT = text(
+    "INSERT INTO login_attempts (attempt_id, email_normalized, outcome, client_ip)"
+    " VALUES (:attempt_id, :email, :outcome, :client_ip)"
 )
 
 
@@ -399,3 +417,158 @@ def test_grant_server_defaults_apply_without_orm(session: Session) -> None:
     ).one()
     assert row.public_visibility is False
     assert row.version == 1
+
+
+# --- 관리자 인증 스키마 (BE-02 1단계의 수동 실측을 자동화) -----------------------
+#
+# 이 제약들은 `alembic check` 가 보지 못한다. autogenerate 와 drift 검사가 CHECK 제약
+# 변경을 감지하지 못하므로(1단계 실측), 걸려 있다는 사실과 실제로 막는다는 사실을
+# 여기서만 단정할 수 있다.
+
+
+def _insert_session(
+    session: Session,
+    admin_id: UUID,
+    *,
+    token_hash: str,
+    created_at: datetime = NOW,
+    last_seen_at: datetime | None = None,
+    absolute_expires_at: datetime | None = None,
+    revoked_at: datetime | None = None,
+) -> None:
+    """원시 SQL 로 세션을 넣는다. ORM 을 거치면 Python 쪽 기본값이 먼저 작동한다."""
+    session.execute(
+        INSERT_SESSION,
+        {
+            "session_id": uuid4(),
+            "token_hash": token_hash,
+            "admin_id": admin_id,
+            "created_at": created_at,
+            "last_seen_at": last_seen_at or created_at,
+            "absolute_expires_at": absolute_expires_at or created_at + timedelta(days=7),
+            "revoked_at": revoked_at,
+        },
+    )
+
+
+def test_uppercase_admin_email_is_rejected(session: Session) -> None:
+    """정규화를 애플리케이션에만 맡기면 email UNIQUE 가 같은 주소를 둘로 본다."""
+    with pytest.raises(IntegrityError, match="email_lowercase"):
+        session.execute(INSERT_ADMIN, {"admin_id": uuid4(), "email": "Admin@Example.com"})
+    session.rollback()
+
+
+@pytest.mark.parametrize(
+    "token_hash",
+    [new_session_token(), "A" * 64, "g" * 64, "a" * 63, ""],
+    ids=["쿠키_원문_43자", "대문자_16진", "16진이_아닌_문자", "63자", "빈값"],
+)
+def test_token_hash_must_be_sha256_hex(session: Session, token_hash: str) -> None:
+    """설계 의도를 제약으로 — "해시만 저장한다" 를 DB 가 강제한다.
+
+    `secrets.token_urlsafe(32)` 는 43자이고 대문자와 -_ 를 포함하므로 이 패턴에
+    걸린다. 즉 쿠키 원문을 실수로 저장하려는 시도가 구조적으로 막힌다.
+    """
+    admin = make_admin(session)
+    session.commit()
+
+    with pytest.raises(IntegrityError, match="token_hash_is_sha256_hex"):
+        _insert_session(session, admin.admin_id, token_hash=token_hash)
+    session.rollback()
+
+
+def test_valid_fingerprint_is_accepted_and_differs_from_the_token(session: Session) -> None:
+    admin = make_admin(session)
+    admin_session, token = make_session(session, admin)
+    session.commit()
+
+    assert admin_session.token_hash == token_fingerprint(token)
+    assert admin_session.token_hash != token
+
+
+def test_token_hash_is_unique(session: Session) -> None:
+    """같은 지문의 세션이 둘 있으면 조회가 어느 쪽인지 알 수 없다."""
+    admin = make_admin(session)
+    session.commit()
+    fingerprint = token_fingerprint("고정-토큰")
+    _insert_session(session, admin.admin_id, token_hash=fingerprint)
+    session.commit()
+
+    with pytest.raises(IntegrityError, match="uq_admin_sessions_token_hash"):
+        _insert_session(session, admin.admin_id, token_hash=fingerprint)
+    session.rollback()
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "constraint"),
+    [
+        ({"absolute_expires_at": NOW - timedelta(days=1)}, "absolute_expiry_after_creation"),
+        ({"last_seen_at": NOW - timedelta(days=1)}, "last_seen_after_creation"),
+        ({"revoked_at": NOW - timedelta(days=1)}, "revoked_after_creation"),
+    ],
+    ids=["절대만료가_생성보다_과거", "마지막_활동이_생성보다_과거", "폐기가_생성보다_과거"],
+)
+def test_session_timestamps_must_follow_creation(
+    session: Session, kwargs: dict[str, datetime], constraint: str
+) -> None:
+    """시각의 순서가 깨진 행은 만료 판정을 무의미하게 만든다."""
+    admin = make_admin(session)
+    session.commit()
+
+    with pytest.raises(IntegrityError, match=constraint):
+        _insert_session(session, admin.admin_id, token_hash=token_fingerprint("t"), **kwargs)
+    session.rollback()
+
+
+def test_unknown_login_outcome_is_rejected(session: Session) -> None:
+    with pytest.raises(IntegrityError, match="outcome_values"):
+        session.execute(
+            INSERT_ATTEMPT,
+            {"attempt_id": uuid4(), "email": "a@b.c", "outcome": "MAYBE", "client_ip": None},
+        )
+    session.rollback()
+
+
+def test_uppercase_attempt_email_is_rejected(session: Session) -> None:
+    """속도 제한이 email 로 집계하므로 대소문자가 섞이면 한도를 우회할 수 있다."""
+    with pytest.raises(IntegrityError, match="email_normalized_lowercase"):
+        session.execute(
+            INSERT_ATTEMPT,
+            {"attempt_id": uuid4(), "email": "A@b.c", "outcome": "FAILURE", "client_ip": None},
+        )
+    session.rollback()
+
+
+def test_malformed_client_ip_is_rejected_by_the_type(session: Session) -> None:
+    """CHECK 가 아니라 `INET` 타입이 입력 파싱 단계에서 거부한다.
+
+    그래서 `IntegrityError` 가 아니라 `DataError` 다. `String(45)` 로 뒀다면 통과했을
+    값이며, 이것이 dialect 타입을 고른 이유다.
+    """
+    with pytest.raises(DataError, match="inet"):
+        session.execute(
+            INSERT_ATTEMPT,
+            {
+                "attempt_id": uuid4(),
+                "email": "a@b.c",
+                "outcome": "FAILURE",
+                "client_ip": "999.1.1.1",
+            },
+        )
+    session.rollback()
+
+
+def test_attempt_for_unknown_account_is_allowed(session: Session) -> None:
+    """외래키를 걸면 존재하지 않는 계정에 대한 시도를 기록할 수 없다.
+
+    그러면 무차별 시도의 흔적이 남지 않아 속도 제한의 근거 자체가 사라진다.
+    """
+    make_login_attempt(session, email="nobody@example.com", client_ip="203.0.113.7")
+    session.commit()
+
+    total = session.scalar(
+        select(func.count())
+        .select_from(login_attempts)
+        .where(login_attempts.c.email_normalized == "nobody@example.com")
+    )
+    assert total == 1
