@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from receipts_api.api.dependencies import (
+    ClientIpDep,
     CsrfGuard,
     CurrentAdminDep,
     LoginPolicyDep,
@@ -112,11 +113,11 @@ def _clear_session_cookie(response: Response, settings: Settings) -> None:
 )
 def login_route(
     payload: LoginRequest,
-    request: Request,
     response: Response,
     db: SessionDep,
     settings: SettingsDep,
     policy: LoginPolicyDep,
+    ip: ClientIpDep,
 ) -> AdminIdentity:
     """세션을 발급한다.
 
@@ -129,7 +130,7 @@ def login_route(
         db,
         email=payload.email,
         password=payload.password,
-        client_ip=request.client.host if request.client else None,
+        client_ip=ip,
         now=datetime.now(UTC),
         policy=policy,
     )

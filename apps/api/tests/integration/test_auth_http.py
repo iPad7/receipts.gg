@@ -12,10 +12,12 @@ Details 의 `code`, 미들웨어 순서, 의존성 조립. 유스케이스의 �
 저장소가 쿠키를 저장하지 않고 모든 후속 요청이 401 이 된다.
 
 `client` 주소를 명시하는 이유: TestClient 의 기본값은 `"testclient"` 이고
-`login_attempts.client_ip` 는 `INET` 이라 그대로 넣으면 DataError 가 난다.
+`login_attempts.client_ip` 는 `INET` 이라 그대로 넣으면 DataError 가 난다. 그 기본값이
+곧 "프록시가 넣은 비 IP 주소" 와 같은 상태라서, `proxied_client` 는 일부러 그쪽을 쓴다.
 """
 
 from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
@@ -47,6 +49,8 @@ ALLOWED_ORIGIN = "https://testserver"
 FOREIGN_ORIGIN = "https://evil.example"
 # RFC 5737 의 문서용 주소. 실제 IP 형식이어야 INET 컬럼에 들어간다.
 CLIENT_ADDRESS = ("198.51.100.7", 54321)
+# 프록시가 `X-Forwarded-For` 를 검증 없이 넣은 상태 (R15).
+NON_IP_ADDRESS = ("not-an-ip", 0)
 ORIGIN_HEADERS = {"Origin": ALLOWED_ORIGIN}
 
 LOGIN_PATH = "/api/v1/auth/login"
@@ -54,8 +58,10 @@ LOGOUT_PATH = "/api/v1/auth/logout"
 ME_PATH = "/api/v1/admin/me"
 
 
-@pytest.fixture
-def client(test_engine: Engine, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
+@contextmanager
+def app_client(
+    test_engine: Engine, monkeypatch: pytest.MonkeyPatch, address: tuple[str, int]
+) -> Iterator[TestClient]:
     """실제 앱을 테스트 DB 에 붙여 띄운다.
 
     `ALLOWED_ORIGINS` 를 주입하는 이유: 기본값이 빈 목록이라 모든 상태 변경 요청이
@@ -65,10 +71,28 @@ def client(test_engine: Engine, monkeypatch: pytest.MonkeyPatch) -> Iterator[Tes
     monkeypatch.setenv("ALLOWED_ORIGINS", ALLOWED_ORIGIN)
     get_settings.cache_clear()
     app = create_app()
-    with TestClient(app, base_url=ALLOWED_ORIGIN, client=CLIENT_ADDRESS) as test_client:
+    with TestClient(app, base_url=ALLOWED_ORIGIN, client=address) as test_client:
         # lifespan 이 개발 DB 로 만든 팩토리를 테스트 DB 로 바꾼다. 통합 테스트는
         # 개발 데이터를 건드리지 않는다 (integration/conftest.py).
         app.state.session_factory = create_session_factory(test_engine)
+        yield test_client
+
+
+@pytest.fixture
+def client(test_engine: Engine, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
+    with app_client(test_engine, monkeypatch, CLIENT_ADDRESS) as test_client:
+        yield test_client
+
+
+@pytest.fixture
+def proxied_client(test_engine: Engine, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
+    """클라이언트 주소가 IP 가 아닌 앱 (R15).
+
+    uvicorn 의 ProxyHeadersMiddleware 는 `X-Forwarded-For` 를 검증 없이
+    `scope["client"]` 에 넣는다. TestClient 의 `client=` 인수가 바로 그 scope 를
+    설정하므로, 앱에 프록시 미들웨어를 끼워 넣지 않고도 같은 상태를 만들 수 있다.
+    """
+    with app_client(test_engine, monkeypatch, NON_IP_ADDRESS) as test_client:
         yield test_client
 
 
@@ -328,6 +352,57 @@ def test_rate_limited_login_returns_429_with_retry_after(
     assert int(response.headers["Retry-After"]) > 0
     # 막힌 시도를 기록하면 창이 영구히 갱신되어 영구 잠금이 된다.
     assert attempt_count(session) == settings.login_max_attempts_per_email
+
+
+# --- 프록시 뒤의 클라이언트 주소 (R15) --------------------------------------
+
+
+def test_login_survives_a_client_address_that_is_not_an_ip(
+    proxied_client: TestClient, session: Session
+) -> None:
+    """미인증 요청이 `X-Forwarded-For` 한 줄로 500 을 만들 수 없어야 한다.
+
+    주소를 그대로 `INET` 컬럼에 넣으면 psycopg DataError 가 트랜잭션을 롤백시켜
+    로그인이 아예 불가능해진다. Presentation 이 걸러내므로 로그인은 성공하고, 시도는
+    **주소 없이** 기록된다.
+    """
+    make_admin(session, email="owner@example.com")
+    session.commit()
+
+    response = proxied_client.post(
+        LOGIN_PATH,
+        json={"email": "owner@example.com", "password": DEFAULT_ADMIN_PASSWORD},
+        headers=ORIGIN_HEADERS,
+    )
+
+    assert response.status_code == 200, response.text
+    assert session.execute(select(login_attempts.c.client_ip)).all() == [(None,)]
+
+
+def test_email_axis_rate_limit_still_applies_without_a_client_address(
+    proxied_client: TestClient, session: Session
+) -> None:
+    """주소를 버려도 보호가 사라지면 안 된다. IP 축만 포기하고 email 축은 남는다."""
+    settings = get_settings()
+    make_admin(session, email="owner@example.com")
+    recent = datetime.now(UTC) - timedelta(seconds=60)
+    for _ in range(settings.login_max_attempts_per_email):
+        make_login_attempt(
+            session,
+            email="owner@example.com",
+            outcome=LoginOutcome.FAILURE,
+            attempted_at=recent,
+        )
+    session.commit()
+
+    response = proxied_client.post(
+        LOGIN_PATH,
+        json={"email": "owner@example.com", "password": DEFAULT_ADMIN_PASSWORD},
+        headers=ORIGIN_HEADERS,
+    )
+
+    assert response.status_code == 429
+    assert response.json()["code"] == "identity.login_rate_limited"
 
 
 # --- /admin/me --------------------------------------------------------------

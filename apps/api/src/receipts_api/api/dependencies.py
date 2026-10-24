@@ -13,6 +13,7 @@ import logging
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from ipaddress import ip_address
 from typing import Annotated
 from uuid import UUID
 
@@ -83,6 +84,35 @@ def login_policy(settings: SettingsDep) -> LoginPolicy:
 
 
 LoginPolicyDep = Annotated[LoginPolicy, Depends(login_policy)]
+
+
+def client_ip(request: Request) -> str | None:
+    """`INET` 컬럼에 넣을 수 있는 값만 통과시킨다.
+
+    `request.client.host` 가 IP 라고 가정할 수 없다. uvicorn 의 ProxyHeadersMiddleware
+    는 `X-Forwarded-For` 를 **검증 없이** `scope["client"]` 에 넣으므로, 프록시를
+    신뢰하도록 설정된 배포(`FORWARDED_ALLOW_IPS=*`)에서는 임의 문자열이 들어온다.
+    그대로 넘기면 psycopg DataError 로 로그인이 500 이 되고, 트랜잭션이 롤백되어
+    시도 기록까지 사라진다 — 미인증 입력으로 만들 수 있는 장애다.
+
+    형식이 아니면 None 으로 떨어뜨린다. IP 축 속도 제한만 포기하고 email 축은 그대로
+    작동한다. 주소를 신뢰할 수 없을 때 500 을 내는 것보다 안전한 방향의 열화다.
+
+    `ip_address` 를 거치면 저장 형태가 정규화된다(`2001:0db8::0001` → `2001:db8::1`).
+    같은 주소가 표기만 달라 서로 다른 축으로 집계되는 일을 막는다.
+    """
+    if request.client is None:
+        # Unix 소켓으로 서빙하면 scope 에 client 가 없다.
+        return None
+    try:
+        return str(ip_address(request.client.host))
+    except ValueError:
+        # 값을 로그에 넣지 않는다(로그 인젝션). RequestIdMiddleware 와 같은 이유다.
+        logger.warning("클라이언트 주소가 IP 형식이 아니다: path=%s", request.url.path)
+        return None
+
+
+ClientIpDep = Annotated[str | None, Depends(client_ip)]
 
 
 @dataclass(frozen=True)
