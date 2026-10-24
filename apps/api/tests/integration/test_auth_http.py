@@ -8,16 +8,13 @@ Details 의 `code`, 미들웨어 순서, 의존성 조립. 유스케이스의 �
 (2026-10-17)를 쓰면 모든 세션이 만료된 것으로 판정된다. 세션·시도 행은 실제 현재 시각을
 기준으로 심는다.
 
-`base_url` 이 https 인 이유: 세션 쿠키가 `Secure` 라서 http 응답에서는 httpx 의 쿠키
-저장소가 쿠키를 저장하지 않고 모든 후속 요청이 401 이 된다.
-
-`client` 주소를 명시하는 이유: TestClient 의 기본값은 `"testclient"` 이고
-`login_attempts.client_ip` 는 `INET` 이라 그대로 넣으면 DataError 가 난다. 그 기본값이
-곧 "프록시가 넣은 비 IP 주소" 와 같은 상태라서, `proxied_client` 는 일부러 그쪽을 쓴다.
+`base_url` 이 https 인 이유와 `client` 주소를 명시하는 이유는 `http_support.py` 에 있다.
+요약하면 쿠키의 `Secure` 속성과 `login_attempts.client_ip` 의 `INET` 타입 때문이다.
+TestClient 의 기본 호스트(`"testclient"`)가 곧 "프록시가 넣은 비 IP 주소" 와 같은
+상태라서, `proxied_client` 는 일부러 그쪽을 쓴다.
 """
 
 from collections.abc import Iterator
-from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
@@ -28,10 +25,8 @@ from sqlalchemy.orm import Session
 
 from receipts_api.api.dependencies import CSRF_HEADER
 from receipts_api.core.config import get_settings
-from receipts_api.core.db import create_session_factory
 from receipts_api.core.request_context import NO_REQUEST_ID
 from receipts_api.core.security import csrf_token, new_session_token, token_fingerprint
-from receipts_api.main import create_app
 from receipts_api.modules.identity.domain import LoginOutcome
 from receipts_api.modules.identity.persistence import admin_sessions, admin_users, login_attempts
 from tests.factories import (
@@ -42,46 +37,19 @@ from tests.factories import (
     make_session,
     make_site,
 )
+from tests.integration.http_support import (
+    ALLOWED_ORIGIN,
+    FOREIGN_ORIGIN,
+    LOGIN_PATH,
+    LOGOUT_PATH,
+    ME_PATH,
+    NON_IP_ADDRESS,
+    ORIGIN_HEADERS,
+    app_client,
+)
+from tests.integration.http_support import login as do_login
 
 pytestmark = pytest.mark.integration
-
-ALLOWED_ORIGIN = "https://testserver"
-FOREIGN_ORIGIN = "https://evil.example"
-# RFC 5737 의 문서용 주소. 실제 IP 형식이어야 INET 컬럼에 들어간다.
-CLIENT_ADDRESS = ("198.51.100.7", 54321)
-# 프록시가 `X-Forwarded-For` 를 검증 없이 넣은 상태 (R15).
-NON_IP_ADDRESS = ("not-an-ip", 0)
-ORIGIN_HEADERS = {"Origin": ALLOWED_ORIGIN}
-
-LOGIN_PATH = "/api/v1/auth/login"
-LOGOUT_PATH = "/api/v1/auth/logout"
-ME_PATH = "/api/v1/admin/me"
-
-
-@contextmanager
-def app_client(
-    test_engine: Engine, monkeypatch: pytest.MonkeyPatch, address: tuple[str, int]
-) -> Iterator[TestClient]:
-    """실제 앱을 테스트 DB 에 붙여 띄운다.
-
-    `ALLOWED_ORIGINS` 를 주입하는 이유: 기본값이 빈 목록이라 모든 상태 변경 요청이
-    403 이 된다. 그 fail-closed 기본값 자체는 아래 Origin 테스트가 반대 방향으로
-    확인한다.
-    """
-    monkeypatch.setenv("ALLOWED_ORIGINS", ALLOWED_ORIGIN)
-    get_settings.cache_clear()
-    app = create_app()
-    with TestClient(app, base_url=ALLOWED_ORIGIN, client=address) as test_client:
-        # lifespan 이 개발 DB 로 만든 팩토리를 테스트 DB 로 바꾼다. 통합 테스트는
-        # 개발 데이터를 건드리지 않는다 (integration/conftest.py).
-        app.state.session_factory = create_session_factory(test_engine)
-        yield test_client
-
-
-@pytest.fixture
-def client(test_engine: Engine, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
-    with app_client(test_engine, monkeypatch, CLIENT_ADDRESS) as test_client:
-        yield test_client
 
 
 @pytest.fixture
@@ -96,19 +64,8 @@ def proxied_client(test_engine: Engine, monkeypatch: pytest.MonkeyPatch) -> Iter
         yield test_client
 
 
-@pytest.fixture
-def cookie_name() -> str:
-    return get_settings().session_cookie_name
-
-
 def login(client: TestClient, email: str, password: str = DEFAULT_ADMIN_PASSWORD) -> dict:
-    """로그인 1회. 응답 본문을 돌려주고 쿠키는 클라이언트에 남는다."""
-    response = client.post(
-        LOGIN_PATH, json={"email": email, "password": password}, headers=ORIGIN_HEADERS
-    )
-    assert response.status_code == 200, response.text
-    body: dict = response.json()
-    return body
+    return do_login(client, email, password)
 
 
 def attempt_count(session: Session) -> int:

@@ -24,6 +24,17 @@ logger = logging.getLogger(__name__)
 # 세션 토큰의 엔트로피(바이트). urlsafe 인코딩 후 43자가 된다.
 SESSION_TOKEN_BYTES = 32
 
+
+# 관리자 계정의 비밀번호 하한. NIST SP 800-63B 의 권고 하한(8자)보다 높게 둔다 —
+# 이 계정은 사이트 전체의 보상 장부를 변경할 수 있다.
+#
+# 문자 종류(대문자·숫자·기호)를 강제하지 않는 것도 같은 권고다. 복잡도 규칙은
+# 사람을 `Password1!` 같은 예측 가능한 패턴으로 몰아가고, 길이보다 엔트로피 기여가
+# 작다. 유출된 비밀번호 목록 대조가 더 효과적이지만 외부 서비스 호출이 필요해
+# P0 범위에 넣지 않는다.
+PASSWORD_MIN_LENGTH = 12
+
+
 _hasher = PasswordHasher(
     time_cost=3,
     memory_cost=64 * 1024,  # KiB 단위이므로 64MiB
@@ -32,6 +43,24 @@ _hasher = PasswordHasher(
     salt_len=16,
     type=Type.ID,
 )
+
+
+def validate_password_strength(password: str) -> None:
+    """정책을 만족하지 않으면 `ValueError`. 만족하면 조용히 돌아온다.
+
+    도메인 예외가 아니라 `ValueError` 인 이유: 지금 이 규칙을 지나는 경로는 운영용
+    CLI 뿐이고 HTTP 응답이 없다. 도메인 예외로 만들면 쓰이지 않는 `ERROR_MAP` 항목이
+    생기고, 더 나쁘게는 `IdentityError` 를 상속해 401 로 조용히 매핑된다 — 잘못된
+    상태 코드가 테스트를 통과한다. 비밀번호 변경 API 가 생기는 단계에서 승격한다.
+
+    앞뒤 공백을 **깎지 않는다.** 비밀번호의 공백은 의미 있는 문자이고, 깎으면
+    사용자가 입력한 것과 저장된 것이 달라진다. 다만 공백만으로 이루어진 입력은
+    실수이므로 거부한다.
+    """
+    if len(password) < PASSWORD_MIN_LENGTH:
+        raise ValueError(f"비밀번호는 {PASSWORD_MIN_LENGTH}자 이상이어야 합니다")
+    if not password.strip():
+        raise ValueError("비밀번호가 공백으로만 이루어져 있습니다")
 
 
 def hash_password(password: str) -> str:

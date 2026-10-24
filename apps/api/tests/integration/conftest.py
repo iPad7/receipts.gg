@@ -17,6 +17,7 @@ from pathlib import Path
 import pytest
 from alembic import command
 from alembic.config import Config
+from fastapi.testclient import TestClient
 from sqlalchemy import Engine, create_engine, text
 from sqlalchemy.engine import URL, make_url
 from sqlalchemy.orm import Session
@@ -24,6 +25,7 @@ from sqlalchemy.orm import Session
 from receipts_api.core.base import metadata
 from receipts_api.core.config import get_settings
 from receipts_api.core.db import create_db_engine, create_session_factory
+from tests.integration.http_support import CLIENT_ADDRESS, app_client
 
 API_ROOT = Path(__file__).resolve().parents[2]
 TEST_DATABASE_NAME = "receipts_test"
@@ -118,6 +120,31 @@ def session(test_engine: Engine) -> Iterator[Session]:
     factory = create_session_factory(test_engine)
     with factory() as db_session:
         yield db_session
+
+
+@pytest.fixture
+def client(test_engine: Engine, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
+    """테스트 DB 에 붙은 실제 앱. HTTP 경로를 쓰는 모든 모듈이 공유한다."""
+    with app_client(test_engine, monkeypatch, CLIENT_ADDRESS) as test_client:
+        yield test_client
+
+
+@pytest.fixture
+def cookie_name() -> str:
+    return get_settings().session_cookie_name
+
+
+@pytest.fixture
+def test_database_env(test_engine: Engine, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`get_settings()` 가 테스트 DB 를 가리키게 한다.
+
+    자기 엔진을 직접 만드는 코드(운영 CLI)를 위한 것이다. 내부를 패치하지 않고 환경
+    변수만 바꾸는 이유: 검증 대상인 조립 코드가 테스트에서도 실제로 실행되어야 한다.
+
+    `test_engine` 에 의존해 테스트 DB 와 마이그레이션이 준비된 뒤에 실행되게 한다.
+    """
+    monkeypatch.setenv("DATABASE_URL", test_database_url().render_as_string(hide_password=False))
+    get_settings.cache_clear()
 
 
 @pytest.fixture

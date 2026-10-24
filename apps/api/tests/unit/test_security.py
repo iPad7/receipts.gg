@@ -7,12 +7,14 @@ import pytest
 from argon2 import PasswordHasher, Type
 
 from receipts_api.core.security import (
+    PASSWORD_MIN_LENGTH,
     csrf_token,
     dummy_password_hash,
     hash_password,
     needs_rehash,
     new_session_token,
     token_fingerprint,
+    validate_password_strength,
     verify_csrf,
     verify_password,
 )
@@ -152,3 +154,70 @@ def test_verify_csrf_rejects_another_sessions_token() -> None:
     mine, other = uuid4(), uuid4()
 
     assert verify_csrf(other, SECRET, csrf_token(mine, SECRET)) is False
+
+
+# --- 비밀번호 정책 (BE-02 4단계) ------------------------------------------------
+
+
+def test_minimum_length_is_above_the_nist_floor() -> None:
+    """NIST SP 800-63B 의 권고 하한은 8자다. 관리자 계정이므로 그보다 높게 둔다.
+
+    상수를 그대로 다시 쓰지 않고 하한과 비교하는 이유: 값을 낮추는 변경이 이 테스트에
+    걸려야 한다. `== 12` 로 쓰면 함께 고치고 지나간다.
+    """
+    assert PASSWORD_MIN_LENGTH >= 12
+
+
+def test_a_password_at_the_minimum_length_passes() -> None:
+    """경계값은 통과해야 한다. `>` 와 `>=` 를 뒤바꾼 실수가 여기서 잡힌다.
+
+    반환값이 없는 함수라 "예외가 오르지 않는다"가 곧 단정이다.
+    """
+    validate_password_strength("a" * PASSWORD_MIN_LENGTH)
+
+
+@pytest.mark.parametrize(
+    "password",
+    [
+        "",
+        "a",
+        "a" * (PASSWORD_MIN_LENGTH - 1),
+    ],
+)
+def test_short_passwords_are_rejected(password: str) -> None:
+    with pytest.raises(ValueError, match=str(PASSWORD_MIN_LENGTH)):
+        validate_password_strength(password)
+
+
+def test_a_whitespace_only_password_is_rejected() -> None:
+    """길이는 충분하지만 실수로 입력된 값이다."""
+    with pytest.raises(ValueError, match="공백"):
+        validate_password_strength(" " * (PASSWORD_MIN_LENGTH + 2))
+
+
+def test_surrounding_whitespace_is_not_stripped() -> None:
+    """비밀번호의 공백은 의미 있는 문자다. 깎으면 입력한 것과 저장된 것이 달라진다.
+
+    공백을 포함해 길이를 세므로, 앞뒤 공백만으로 하한을 넘긴 값도 통과한다. 이 동작을
+    고정해 두는 이유는 `strip()` 후 검사하도록 바꾸는 변경이 조용히 지나가지 않게
+    하기 위한 것이다.
+    """
+    password = "  " + "a" * (PASSWORD_MIN_LENGTH - 2)
+
+    validate_password_strength(password)
+    # 해시도 원문 그대로를 쓴다.
+    assert verify_password(hash_password(password), password) is True
+    assert verify_password(hash_password(password), password.strip()) is False
+
+
+@pytest.mark.parametrize(
+    "password",
+    [
+        "저장소영수증열두자이상입니다",
+        "🔐🔐🔐🔐🔐🔐🔐🔐🔐🔐🔐🔐",
+        "a" * 200,
+    ],
+)
+def test_non_ascii_and_long_passwords_are_accepted(password: str) -> None:
+    """문자 종류를 강제하지 않는다 (NIST SP 800-63B). 길이만 본다."""
+    validate_password_strength(password)

@@ -24,11 +24,13 @@ from receipts_api.core.security import (
     needs_rehash,
     new_session_token,
     token_fingerprint,
+    validate_password_strength,
     verify_password,
 )
 from receipts_api.core.transaction import transactional
 from receipts_api.modules.identity.domain import (
     AdminSession,
+    AdminSitePermission,
     AdminUser,
     InvalidCredentials,
     LoginAttempt,
@@ -308,3 +310,70 @@ def permitted_site_ids(db: Session, *, admin_id: UUID) -> frozenset[UUID]:
             )
         )
     )
+
+
+# --- 프로비저닝 (운영 CLI 전용) ---------------------------------------------
+#
+# 공개 API 로는 계정을 만들 수 없다. 회원가입 엔드포인트를 두면 그것이 곧 권한 상승
+# 경로가 된다 (ADR-0004 — "배포·관리 절차로 생성한 계정").
+
+
+def create_admin(db: Session, *, email: str, password: str) -> AdminUser:
+    """관리자 계정을 만든다.
+
+    이메일 정규화를 서비스가 하는 이유: 호출자가 잊으면 DB 의 lowercase CHECK 가
+    막아 주지만, 그 오류 메시지로는 무엇이 문제인지 알 수 없다. 로그인 경로와 **같은**
+    `normalize_email` 을 쓰므로 `Owner@Example.com` 으로 만든 계정이
+    `owner@example.com` 으로 로그인된다.
+
+    중복 검사를 먼저 하는 것은 **메시지를 위한 것이고 보증이 아니다.** 진짜 보증은
+    `uq_admin_users_email` 이다. 두 CLI 가 동시에 실행되면 이 검사를 둘 다 통과한 뒤
+    하나가 IntegrityError 를 받는다 — 운영 도구에서 허용되는 경합이다.
+    """
+    validate_password_strength(password)
+    normalized = normalize_email(email)
+    if db.scalar(select(exists().where(admin_users.c.email == normalized))):
+        raise ValueError(f"이미 존재하는 이메일입니다: {normalized}")
+
+    admin = AdminUser(
+        email=normalized,
+        password_hash=hash_password(password),
+        is_active=True,
+    )
+    with transactional(db):
+        db.add(admin)
+        db.flush()
+    return admin
+
+
+def find_admin_by_email(db: Session, *, email: str) -> AdminUser | None:
+    """이메일로 계정을 찾는다. 비활성 계정도 돌려준다.
+
+    `_authenticate` 와 달리 `is_active` 를 걸지 않는다. 운영 도구는 비활성 계정에도
+    권한을 부여하거나 상태를 확인해야 한다.
+    """
+    return db.scalars(
+        select(AdminUser).where(admin_users.c.email == normalize_email(email))
+    ).one_or_none()
+
+
+def grant_site_access(db: Session, *, admin_id: UUID, site_id: UUID) -> bool:
+    """권한을 부여한다. 새로 만들었으면 True, 이미 있었으면 False.
+
+    멱등하게 두는 이유: 운영자가 같은 명령을 두 번 실행하는 것은 흔하고, 그때
+    복합 PK 중복 오류를 보여 줄 이유가 없다. 반환값으로 어느 쪽이었는지 알려 준다.
+    """
+    if has_site_access(db, admin_id=admin_id, site_id=site_id):
+        return False
+    with transactional(db):
+        db.add(AdminSitePermission(admin_id=admin_id, site_id=site_id))
+    return True
+
+
+def list_admins(db: Session) -> list[AdminUser]:
+    """전체 관리자. 운영 규모가 한 자리 수라 페이지네이션을 두지 않는다.
+
+    사이트 slug 는 여기서 붙이지 않는다. slug 는 sites 모듈의 소유이고, 조인하면
+    모듈 독립이 깨진다 — 두 모듈의 결과를 합치는 것은 조립 지점(CLI)의 일이다.
+    """
+    return list(db.scalars(select(AdminUser).order_by(admin_users.c.email)))

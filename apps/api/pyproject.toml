@@ -85,8 +85,12 @@ forbidden_modules = ["fastapi", "starlette"]
 # import 하지 않는다" 를 쓰면 새 파일 이름이 목록에 없을 때 검사 대상에서 조용히 빠진다.
 # 라우터는 그 자체로 Presentation 이므로 `api` 를 쓰는 유일한 자리다.
 # 인증 의존성은 여러 모듈이 공유하는 횡단 관심사라 특정 모듈에 둘 수 없다(independence).
+#
+# `cli` 는 `main` 과 같은 조립 지점이다. 조립 지점이 전부를 아는 것은 설계대로이며,
+# 화이트리스트이므로 **누가 조립 지점인지가 여기에 열거**된다. 새 파일이 조용히 그
+# 권한을 얻을 수는 없다.
 [[tool.importlinter.contracts]]
-name = "Presentation 과 앱 조립은 라우터·main 만 import 한다"
+name = "Presentation 과 앱 조립은 라우터·main·cli 만 import 한다"
 type = "protected"
 protected_modules = [
     "receipts_api.api",
@@ -95,6 +99,7 @@ protected_modules = [
 ]
 allowed_importers = [
     "receipts_api.main",
+    "receipts_api.cli",
     "receipts_api.modules.*.router",
 ]
 
