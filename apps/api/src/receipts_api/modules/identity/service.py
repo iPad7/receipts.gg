@@ -262,6 +262,26 @@ def logout(db: Session, *, token: str, now: datetime) -> None:
             admin_session.revoked_at = now
 
 
+def active_admin_for(db: Session, *, admin_id: UUID) -> AdminUser:
+    """세션 주인을 읽으면서 아직 활성인지 확인한다.
+
+    계정을 비활성화해도 이미 발급된 세션이 살아 있으면 안 된다. 세션 행만 보면 그
+    전이를 놓친다 — `is_active` 는 로그인 시점에만 확인되기 때문이다.
+
+    비활성이면 `SessionExpired` 로 접는다. 새 코드를 늘리지 않는 이유는 프론트엔드의
+    복구 동작이 같기 때문이다 — 쿠키를 버리고 로그인 화면으로.
+    """
+    admin = db.scalars(
+        select(AdminUser).where(
+            admin_users.c.admin_id == admin_id,
+            admin_users.c.is_active.is_(True),
+        )
+    ).one_or_none()
+    if admin is None:
+        raise SessionExpired()
+    return admin
+
+
 def has_site_access(db: Session, *, admin_id: UUID, site_id: UUID) -> bool:
     """권한 행의 존재가 곧 권한이다 (ADR-0005).
 

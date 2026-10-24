@@ -71,6 +71,8 @@ class Settings(BaseSettings):
         """설정 조합 자체가 위험한 경우를 부팅에서 막는다."""
         if self.app_env == "production" and not self.session_cookie_secure:
             raise ValueError("production에서는 session_cookie_secure를 끌 수 없다")
+        if self.app_env == "production" and not self.origin_allowlist:
+            raise ValueError("production에서는 ALLOWED_ORIGINS가 비어 있을 수 없다")
         if self.session_absolute_seconds < self.session_idle_seconds:
             raise ValueError("세션 절대 수명이 유휴 수명보다 짧다")
         return self

@@ -12,6 +12,8 @@
 """
 
 import logging
+from datetime import UTC, datetime
+from math import ceil
 from typing import Any
 
 from fastapi import FastAPI, status
@@ -34,8 +36,22 @@ URN_PREFIX = "urn:receipts:error:"
 INTERNAL_ERROR_CODE = "common.internal_error"
 UNKNOWN_HTTP_CODE = "common.http_error"
 
-# 도메인 예외 → HTTP 상태. MRO 순회로 조회하므로 기반 클래스 하나가 하위를 덮는다.
-# 새 도메인 예외 계열을 추가하고 이 표를 잊으면 테스트가 CI 에서 막는다.
+# CSRF·Origin 검증 실패. identity 가 아니라 common 인 이유: 이것은 identity 의 업무
+# 규칙이 아니라 Presentation 계층의 실패다. 도메인 예외로 만들면 도메인이 HTTP 를
+# 알게 된다 (ADR-0008 §3). 두 검사에 같은 코드를 쓴다 — 어느 쪽에서 걸렸는지는
+# 공격자에게 알려줄 이유가 없고 서버 로그에만 남긴다.
+CSRF_FAILED_CODE = "common.csrf_failed"
+
+
+class CsrfValidationFailed(Exception):
+    """CSRF 토큰 또는 Origin 검증 실패.
+
+    `DomainError` 가 **아니다.** CSRF 는 identity 의 업무 규칙이 아니라 쿠키 인증을
+    쓰는 Presentation 계층의 문제이고, 도메인 예외로 만들면 도메인이 HTTP 를 알게
+    된다 (ADR-0008 §3). 그래서 `ERROR_MAP` 에 넣지 않고 전용 핸들러를 쓴다.
+    """
+
+
 # 도메인 예외 → HTTP 상태. MRO 순회로 조회하므로 기반 클래스 하나가 하위를 덮는다.
 # 새 도메인 예외 계열을 추가하고 이 표를 잊으면 테스트가 CI 에서 막는다.
 ERROR_MAP: dict[type[DomainError], int] = {
@@ -74,6 +90,7 @@ _TITLES: dict[str, str] = {
     "identity.invalid_credentials": "이메일 또는 비밀번호가 올바르지 않습니다",
     "identity.session_expired": "세션이 만료되었습니다. 다시 로그인해 주세요",
     "identity.login_rate_limited": "로그인 시도가 너무 많습니다. 잠시 후 다시 시도해 주세요",
+    CSRF_FAILED_CODE: "보안 검증에 실패했습니다. 페이지를 새로 고친 뒤 다시 시도해 주세요",
 }
 DEFAULT_TITLE = "요청을 처리할 수 없습니다"
 
@@ -113,6 +130,7 @@ def problem_response(
     code: str,
     detail: str | None = None,
     errors: dict[str, Any] | None = None,
+    headers: dict[str, str] | None = None,
 ) -> JSONResponse:
     body = ProblemDetail(
         type=f"{URN_PREFIX}{code}",
@@ -127,6 +145,7 @@ def problem_response(
         status_code=status_code,
         content=body.model_dump(),
         media_type=PROBLEM_JSON,
+        headers=headers,
     )
 
 
@@ -136,6 +155,20 @@ async def handle_unexpected(request: Request, exc: Exception) -> JSONResponse:
     return problem_response(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, code=INTERNAL_ERROR_CODE
     )
+
+
+def _retry_after(exc: DomainError) -> dict[str, str] | None:
+    """도메인은 시각을 들고 있고, 초 환산은 Presentation 이 한다 (ADR-0008 §3).
+
+    `LoginRateLimited.retry_at` 이 `datetime` 인 이유가 여기서 드러난다. 도메인이
+    `retry_after_seconds` 를 들고 있었다면 HTTP 헤더의 단위가 도메인에 새어 들어갔다.
+
+    RFC 9110 의 `Retry-After` 는 음수를 허용하지 않으므로 0 으로 깎는다.
+    """
+    if not isinstance(exc, LoginRateLimited):
+        return None
+    seconds = ceil((exc.retry_at - datetime.now(UTC)).total_seconds())
+    return {"Retry-After": str(max(seconds, 0))}
 
 
 async def handle_domain_error(request: Request, exc: Exception) -> JSONResponse:
@@ -153,7 +186,7 @@ async def handle_domain_error(request: Request, exc: Exception) -> JSONResponse:
     # detail 에 str(exc) 를 넣지 않는다. 도메인 예외 메시지에는 내부 식별자가 섞여 있고
     # 이 핸들러는 Public 응답에도 쓰인다 (불변식 9, SA §8).
     logger.warning("도메인 규칙 위반: %s", exc)
-    return problem_response(status_code=mapped, code=exc.code)
+    return problem_response(status_code=mapped, code=exc.code, headers=_retry_after(exc))
 
 
 async def handle_validation_error(request: Request, exc: Exception) -> JSONResponse:
@@ -176,6 +209,11 @@ async def handle_validation_error(request: Request, exc: Exception) -> JSONRespo
     )
 
 
+async def handle_csrf_failed(request: Request, exc: Exception) -> JSONResponse:
+    """실패 사유를 응답에 담지 않는다. 어느 검사에서 걸렸는지는 로그에만 남긴다."""
+    return problem_response(status_code=status.HTTP_403_FORBIDDEN, code=CSRF_FAILED_CODE)
+
+
 async def handle_http_exception(request: Request, exc: Exception) -> JSONResponse:
     if not isinstance(exc, HTTPException):
         return await handle_unexpected(request, exc)
@@ -190,5 +228,6 @@ def register_error_handlers(app: FastAPI) -> None:
     """모든 오류 응답을 problem+json 한 형식으로 통일한다."""
     app.add_exception_handler(DomainError, handle_domain_error)
     app.add_exception_handler(RequestValidationError, handle_validation_error)
+    app.add_exception_handler(CsrfValidationFailed, handle_csrf_failed)
     app.add_exception_handler(HTTPException, handle_http_exception)
     app.add_exception_handler(Exception, handle_unexpected)
