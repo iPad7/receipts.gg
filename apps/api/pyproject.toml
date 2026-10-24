@@ -81,17 +81,51 @@ type = "forbidden"
 source_modules = ["receipts_api.core"]
 forbidden_modules = ["fastapi", "starlette"]
 
+# 화이트리스트(fail-closed)로 둔다. `forbidden` 으로 "domain·persistence·service 는 api 를
+# import 하지 않는다" 를 쓰면 새 파일 이름이 목록에 없을 때 검사 대상에서 조용히 빠진다.
+# 라우터는 그 자체로 Presentation 이므로 `api` 를 쓰는 유일한 자리다.
+# 인증 의존성은 여러 모듈이 공유하는 횡단 관심사라 특정 모듈에 둘 수 없다(independence).
 [[tool.importlinter.contracts]]
-name = "모듈은 Presentation 을 import 하지 않는다"
-type = "forbidden"
-source_modules = ["receipts_api.modules.*"]
-forbidden_modules = ["receipts_api.api", "receipts_api.main", "receipts_api.mappings"]
+name = "Presentation 과 앱 조립은 라우터·main 만 import 한다"
+type = "protected"
+protected_modules = [
+    "receipts_api.api",
+    "receipts_api.main",
+    "receipts_api.mappings",
+]
+allowed_importers = [
+    "receipts_api.main",
+    "receipts_api.modules.*.router",
+]
 
-# 현재 모듈 간 import 는 0건이다. BE-05 에서 RMS 가 Viewers·Roulette 의 service 를
+# 모듈 **내부**의 계층 방향. 위 계약과 직교한다 — 이쪽은 api 를 보지 않고, 저쪽은
+# 모듈 내부를 보지 않는다. 괄호는 선택적 계층이라 router·service 가 아직 없는 모듈에서
+# 계약이 깨지지 않는다.
+[[tool.importlinter.contracts]]
+name = "모듈 내부의 계층 방향"
+type = "layers"
+layers = ["(router)", "(service)", "persistence", "domain"]
+containers = [
+    "receipts_api.modules.sites",
+    "receipts_api.modules.identity",
+    "receipts_api.modules.viewers",
+    "receipts_api.modules.roulette",
+    "receipts_api.modules.rms",
+    "receipts_api.modules.audit",
+]
+
+# 모듈 간 직접 import 는 0건이다. BE-05 에서 RMS 가 Viewers·Roulette 의 service 를
 # 호출해야 하면 이 계약을 모듈별 forbidden 으로 완화하고, 그때 명시적으로 승인받는다.
+#
+# `independence` 는 **간접 경로까지** 센다(실측). 조립 지점인 api 가 여러 모듈의 service
+# 를 호출하므로, 라우터가 api 를 쓰는 순간 "sites.router -> api -> identity.service" 가
+# 모듈 간 결합으로 집계된다. 모듈러 모놀리스에서 조립 지점이 전부를 아는 것은 설계대로이고
+# 모듈 사이의 결합이 아니므로 그 경로만 제외한다. 모듈 간 **직접** import 는 그대로 막힌다
+# (돌연변이 검사로 확인).
 [[tool.importlinter.contracts]]
 name = "모듈은 서로 독립이다"
 type = "independence"
+ignore_imports = ["receipts_api.api.** -> receipts_api.modules.**"]
 modules = [
     "receipts_api.modules.sites",
     "receipts_api.modules.identity",

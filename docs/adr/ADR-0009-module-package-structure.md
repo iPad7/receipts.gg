@@ -1,5 +1,7 @@
 # receipts.gg (가제) — ADR-0009 — 모듈 패키지 구조와 경계 강제
 
+- 개정:
+  - 2026-10-24 — 경계 계약 재작성 (BE-02 3단계). 아래 보강 절 참조
 - 날짜: 2026-10-15
 - 상태: Proposed
 - 참조: SOFTWARE_ARCHITECTURE.md §4·§5, ADR-0001, ADR-0003, ADR-0007, DEVELOPMENT_PLAN.md BE-01
@@ -60,7 +62,9 @@ SA §4의 "Application Interface를 통해 호출"을 **모듈의 공개 service
 
 - 도메인은 `sqlalchemy`·`alembic`·`fastapi`·`pydantic`을 import하지 않는다
 - `core`는 `modules`를 import하지 않는다
-- `modules`는 Presentation을 import하지 않는다
+- `core`는 `fastapi`·`starlette`을 import하지 않는다
+- `api`·`main`·`mappings`는 **라우터와 `main`만** import한다 (아래 보강 절)
+- 모듈 내부의 계층은 `router → service → persistence → domain` 한 방향으로만 흐른다
 - 모듈은 서로 독립이다
 
 ### 6. 코딩 규약
@@ -89,3 +93,78 @@ SA §4의 "Application Interface를 통해 호출"을 **모듈의 공개 service
 ## 재검토 조건
 
 두 번째 영속 기술이 도입될 때, 영속 모델과 도메인 모델의 형태가 실제로 달라질 때, 또는 모듈 간 호출이 늘어 `independence` 계약이 유지 불가능해질 때 재평가한다.
+
+---
+
+## 보강: 경계 계약의 재작성 (2026-10-24, BE-02 3단계)
+
+### 맥락
+
+위 §5의 계약 하나가 이렇게 쓰여 있었다.
+
+```toml
+name = "모듈은 Presentation 을 import 하지 않는다"
+type = "forbidden"
+source_modules = ["receipts_api.modules.*"]
+forbidden_modules = ["receipts_api.api", "receipts_api.main", "receipts_api.mappings"]
+```
+
+이름은 "**모듈**은 Presentation을 import하지 않는다"였지만 의도는 계층 방향("업무 로직은 HTTP를 모른다")이었다. BE-01 시점에 `modules/<모듈>/`에는 `domain.py`와 `persistence.py`만 있었으므로 "modules 안에는 Presentation이 없다"가 **우연히 참**이었고, 이름과 의도가 일치했다.
+
+그런데 §1이 라우터를 모듈 안에 두기로 했고 SA §5는 "계층은 모듈 내부의 파일로 실현한다"고 못 박았다. **`modules/`는 계층이 아니라 모듈 묶음이고 그 안에 4계층이 전부 들어 있다.** 이 계약은 디렉터리 이름을 계층으로 착각했고, `router.py`가 생기는 순간 전제가 소멸한다.
+
+BE-02 3단계에서 실제로 그 순간이 왔다. `identity/router.py`와 `sites/router.py`가 둘 다 인증 의존성을 필요로 하는데, 그 의존성은 여러 모듈이 공유하는 횡단 관심사라 어느 한 모듈에 둘 수 없다 — identity에 두면 다른 모듈의 라우터가 identity를 import해야 하고 `independence` 계약이 깨진다.
+
+### 결정
+
+계약 하나를 **두 개로 교체**한다.
+
+**(1) `protected` — 화이트리스트.** `api`·`main`·`mappings`는 `main`과 `modules.*.router`만 import할 수 있다.
+
+`forbidden`의 source를 `modules.*.{domain,persistence,service}`로 좁히는 대안보다 이쪽을 택한 이유는 **fail-closed**다. `forbidden`은 목록에 없는 새 파일 이름이 검사 대상에서 조용히 빠진다. §6이 "파일이 3개를 넘을 때 쪼갠다"고 했으니 파일이 늘어나는 것은 예정된 일이고, 그때마다 계약이 뒤처진다. 화이트리스트는 `modules.*.router` 와일드카드 덕에 라우터가 늘어도 손댈 필요가 없고, 그 외 어떤 파일이 `api`를 건드리면 CI가 막는다.
+
+**(2) `layers` + `containers` — 모듈 내부의 계층 방향.** `router → service → persistence → domain`. 선택적 계층(괄호)으로 선언해 `router`·`service`가 없는 모듈에서도 성립한다.
+
+(1)과 직교한다. (1)은 `api`를 보지만 모듈 내부를 보지 않고, (2)는 모듈 내부를 보지만 `api`를 보지 않는다. 지금 추가하는 이유는 타이밍이다 — 3단계가 `service.py`·`router.py`를 처음 만드는 시점이라 드리프트가 0에서 시작한다. 나중에 추가하면 이미 생긴 역방향 import를 먼저 걷어내야 한다.
+
+### 실측 결과
+
+계약이 공허하게 통과하지 않는지 임시 파일로 확인했다(모두 삭제).
+
+| 변형 | 기대 | 결과 |
+|---|---|---|
+| `audit/service.py` → `api` | 차단 | BROKEN |
+| `audit/router.py` → `api` | 허용 | KEPT |
+| `audit/service.py` → `audit/router` | 차단 | BROKEN |
+| `audit/queries.py` → `api` | 차단 | **BROKEN** |
+
+마지막 행이 `forbidden` 대신 `protected`를 고른 근거다. source 목록 방식이었다면 `queries`가 목록에 없어 통과했다.
+
+### `independence`가 조립 경로를 결합으로 센다
+
+위 두 계약을 넣고 라우터를 붙이려는 순간 세 번째 문제가 드러났다. **`independence`는 간접 경로까지 센다.**
+
+```text
+receipts_api.modules.audit is not allowed to import receipts_api.modules.identity:
+  receipts_api.api._probe_dep -> receipts_api.modules.identity.service
+```
+
+인증 의존성이 `api`에 있고 그것이 identity의 service를 호출하므로, 어떤 모듈의 라우터가 `api`를 쓰는 순간 `sites.router → api → identity.service`가 **모듈 간 결합으로 집계된다.** 지금까지 드러나지 않은 이유는 `api`가 `main`에만 import되어 모듈에서 출발하는 경로가 없었기 때문이다(`api/errors.py`는 이전부터 `identity.domain`·`rms.domain`을 import하고 있었다).
+
+ADR-0001이 "내부 모듈 간 호출은 프로세스 내 Application Service를 사용한다"고 한 그 **조립을 수행하는 자리가 `api`다.** 모듈러 모놀리스에서 조립 지점이 모든 모듈을 아는 것은 설계대로이고 모듈 사이의 결합이 아니다. 그래서 그 경로만 제외한다.
+
+```toml
+ignore_imports = ["receipts_api.api.** -> receipts_api.modules.**"]
+```
+
+모듈 간 **직접** import는 그대로 막힌다 — `audit/service.py`가 `identity/service.py`를 직접 import하면 계약이 깨지는 것을 확인했다. 즉 제외된 것은 "조립 지점을 거치는 경로"뿐이고, 계약의 본래 보장(모듈은 서로를 직접 모른다)은 유지된다.
+
+`import-linter 2.15`의 계약 타입은 `forbidden`·`independence`·`layers`·`protected`·`acyclic_siblings` 다섯이다. 처음 §5를 쓸 때는 앞의 둘만 전제로 삼았고, 뒤의 셋을 확인하지 않았다.
+
+### 결과와 트레이드오프
+
+계약이 4개에서 6개로 늘었다. 각각이 서로 다른, 말로 설명할 수 있는 실패를 막으므로 §4의 "과잉 추상화 금지"에 어긋나지 않는다고 판단한다.
+
+느슨해진 것은 하나다 — **라우터는 `api` 패키지의 무엇이든 import할 수 있다.** `api.dependencies`만으로 좁히려면 `protected_modules`를 하위 모듈 단위로 쪼개 적어야 하고, 그 비용이 얻는 것보다 크다. 핵심 보장은 유지된다: 도메인·영속·서비스 계층은 여전히 HTTP를 모른다.
+
+`main`·`mappings`를 같은 계약에 묶은 결과로 라우터가 `mappings`를 import하는 것도 허용된다. 그럴 이유가 없는 import이고, 막아서 얻는 것이 계약을 하나 더 두는 비용보다 작다.
